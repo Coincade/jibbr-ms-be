@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        .container {
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        a {
+            display: inline-block;
+            padding: 5px 10px;
+            background-color: gray;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        a:hover {
+            background-color: #c1d4e8;
+        } 
+    </style>
+</head>
+<body>
+    <div class="container">
+        <p>Hello <strong><%= name %></strong>,</p>
+        <p>Please click the link below to verify your email</p>
+        <a href="<%= url %>" target="_blank">Verify Email</a>
+
+        <p>If you are not able to click the link, then please copy and paste the below URL in your browser:</p>
+        <p style="word-break: break-all;"><%= url %></p>
+
+        <%- include('../partials/footer') %>
+    </div>
+</body>
+</html>

@@ -1,0 +1,42 @@
+{
+  "name": "jibbr-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "npm@10.9.2",
+  "description": "Jibbr microservices monorepo with Turborepo",
+  "workspaces": [
+    "services/*",
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "dev:auth": "turbo run dev --filter=auth-service",
+    "dev:upload": "turbo run dev --filter=upload-service",
+    "dev:messaging": "turbo run dev --filter=messaging-service",
+    "dev:all": "turbo run dev --filter='./services/*'",
+    "start": "turbo run start",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "type-check": "turbo run type-check",
+    "clean": "turbo run clean",
+    "db:generate": "turbo run db:generate",
+    "db:migrate": "turbo run db:migrate"
+  },
+  "keywords": [
+    "monorepo",
+    "microservices",
+    "turborepo"
+  ],
+  "author": "Yash KVR",
+  "license": "ISC",
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=7.0.0"
+  }
+}
+

@@ -1,0 +1,274 @@
+generator client {
+  provider = "prisma-client-js"
+  // Generate the shared Prisma Client used via `@prisma/client` at the repo root
+  output   = "../../../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                       String                      @id @default(cuid())
+  name                     String?
+  email                    String                      @unique
+  password                 String
+  password_reset_token     String?
+  token_send_at            DateTime?
+  email_verified_at        DateTime?
+  email_verify_token       String?
+  createdAt                DateTime                    @default(now())
+  image                    String?
+  updatedAt                DateTime                    @default(now()) @updatedAt
+  channels                 Channel[]
+  channelMembers           ChannelMember[]
+  conversations            ConversationParticipant[]
+  conversationReadStatuses ConversationReadStatus[]
+  forwardedMessages        ForwardedMessage[]
+  members                  Member[]
+  messages                 Message[]
+  mentions                 MessageMention[]
+  reactions                Reaction[]
+  userNotifications        UserNotification[]
+  notificationPreferences  UserNotificationPreference?
+  pushTokens               UserPushToken[]
+  workspaces               Workspace[]
+}
+
+model Workspace {
+  id                     String    @id @default(cuid())
+  name                   String
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @default(now()) @updatedAt
+  joinCode               String
+  userId                 String
+  image                  String?
+  isActive               Boolean   @default(true)
+  deletedAt              DateTime?
+  fileAttachmentsEnabled Boolean   @default(true)
+  channels               Channel[]
+  members                Member[]
+  user                   User      @relation(fields: [userId], references: [id])
+}
+
+model Channel {
+  id                String             @id @default(cuid())
+  name              String
+  type              ChannelType        @default(PUBLIC)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @default(now()) @updatedAt
+  workspaceId       String
+  deletedAt         DateTime?
+  image             String?
+  channelAdminId    String
+  channelAdmin      User               @relation(fields: [channelAdminId], references: [id])
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id])
+  members           ChannelMember[]
+  forwardedMessages ForwardedMessage[]
+  messages          Message[]
+}
+
+model Conversation {
+  id                String                    @id @unique @default(cuid())
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @default(now()) @updatedAt
+  participants      ConversationParticipant[]
+  readStatuses      ConversationReadStatus[]
+  forwardedMessages ForwardedMessage[]
+  messages          Message[]
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @default(now()) @updatedAt
+  conversationId String
+  userId         String
+  isActive       Boolean      @default(true)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+}
+
+model Message {
+  id                String             @id @default(cuid())
+  content           String
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @default(now()) @updatedAt
+  channelId         String?
+  replyToId         String?
+  userId            String
+  conversationId    String?
+  deletedAt         DateTime?
+  attachments       Attachment[]
+  forwardedMessages ForwardedMessage[]
+  channel           Channel?           @relation(fields: [channelId], references: [id])
+  conversation      Conversation?      @relation(fields: [conversationId], references: [id])
+  replyTo           Message?           @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies           Message[]          @relation("MessageReplies")
+  user              User               @relation(fields: [userId], references: [id])
+  mentions          MessageMention[]
+  reactions         Reaction[]
+}
+
+model Attachment {
+  id           String   @id @default(cuid())
+  filename     String
+  originalName String
+  mimeType     String
+  size         Int
+  url          String
+  createdAt    DateTime @default(now())
+  messageId    String
+  message      Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+model Reaction {
+  id        String   @id @default(cuid())
+  emoji     String
+  createdAt DateTime @default(now())
+  messageId String
+  userId    String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([messageId, userId, emoji])
+}
+
+model ForwardedMessage {
+  id                String        @id @default(cuid())
+  createdAt         DateTime      @default(now())
+  originalMessageId String
+  forwardedByUserId String
+  channelId         String?
+  conversationId    String?
+  channel           Channel?      @relation(fields: [channelId], references: [id])
+  conversation      Conversation? @relation(fields: [conversationId], references: [id])
+  forwardedBy       User          @relation(fields: [forwardedByUserId], references: [id])
+  originalMessage   Message       @relation(fields: [originalMessageId], references: [id])
+}
+
+model Member {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+  workspaceId String
+  userId      String
+  role        Role
+  isActive    Boolean   @default(true)
+  user        User      @relation(fields: [userId], references: [id])
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+}
+
+model ChannelMember {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+  channelId   String
+  userId      String
+  isActive    Boolean   @default(true)
+  lastReadAt  DateTime?
+  unreadCount Int       @default(0)
+  channel     Channel   @relation(fields: [channelId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@unique([channelId, userId])
+}
+
+model UserNotification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  readAt    DateTime?
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+}
+
+model ConversationReadStatus {
+  id             String       @id @default(cuid())
+  conversationId String
+  userId         String
+  lastReadAt     DateTime     @default(now())
+  unreadCount    Int          @default(0)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId, lastReadAt])
+}
+
+model UserNotificationPreference {
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  emailNotifications   Boolean  @default(true)
+  pushNotifications    Boolean  @default(true)
+  desktopNotifications Boolean  @default(true)
+  soundEnabled         Boolean  @default(true)
+  mentionNotifications Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @default(now()) @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MessageMention {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId, createdAt])
+}
+
+model UserPushToken {
+  id         String       @id @default(cuid())
+  userId     String
+  token      String       @unique
+  platform   PushPlatform @default(UNKNOWN)
+  deviceName String?
+  appVersion String?
+  lastUsedAt DateTime?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @default(now()) @updatedAt
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, platform])
+}
+
+enum ChannelType {
+  PUBLIC
+  PRIVATE
+  ANNOUNCEMENT
+}
+
+enum Role {
+  ADMIN
+  MODERATOR
+  MEMBER
+}
+
+enum NotificationType {
+  NEW_MESSAGE
+  MENTION
+  REACTION
+  CHANNEL_INVITE
+  WORKSPACE_INVITE
+  SYSTEM
+}
+
+enum PushPlatform {
+  IOS
+  ANDROID
+  UNKNOWN
+}
