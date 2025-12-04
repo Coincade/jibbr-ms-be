@@ -4,10 +4,31 @@ import { Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { createRedisClients } from '../config/redis.js';
 import { checkMessageRateLimit } from '../services/rate-limiter.js';
-import { authenticateSocket, removeClientFromAllChannels, addClientToChannel, removeClientFromAllConversations, addClientToConversation } from './utils.js';
-import { handleSendMessage, handleEditMessage, handleDeleteMessage, handleForwardMessage } from './handlers/message.handler.js';
-import { handleAddReaction, handleRemoveReaction } from './handlers/reaction.handler.js';
-import { handleSendDirectMessage, handleEditDirectMessage, handleDeleteDirectMessage, handleAddDirectReaction, handleRemoveDirectReaction, handleForwardDirectMessage } from './handlers/direct-message.handler.js';
+import {
+  authenticateSocket,
+  removeClientFromAllChannels,
+  addClientToChannel,
+  removeClientFromAllConversations,
+  addClientToConversation,
+} from './utils.js';
+import {
+  handleSendMessage,
+  handleEditMessage,
+  handleDeleteMessage,
+  handleForwardMessage,
+} from './handlers/message.handler.js';
+import {
+  handleAddReaction,
+  handleRemoveReaction,
+} from './handlers/reaction.handler.js';
+import {
+  handleSendDirectMessage,
+  handleEditDirectMessage,
+  handleDeleteDirectMessage,
+  handleAddDirectReaction,
+  handleRemoveDirectReaction,
+  handleForwardDirectMessage,
+} from './handlers/direct-message.handler.js';
 
 // Global state for managing socket connections
 let io: SocketIOServer;
@@ -17,50 +38,54 @@ const onlineUsers: Map<string, Set<Socket>> = new Map(); // userId -> Set of soc
 const userSockets: Map<string, string> = new Map(); // socketId -> userId
 
 // Initialize WebSocket service
-export const initializeWebSocketService = async (server: Server): Promise<SocketIOServer> => {
+export const initializeWebSocketService = async (
+  server: Server
+): Promise<SocketIOServer> => {
   const isProduction = process.env.NODE_ENV === 'production';
-  
+
   io = new SocketIOServer(server, {
     cors: {
-      origin: process.env.FRONTEND_URL || "http://localhost:5173",
-      methods: ["GET", "POST"],
-      credentials: true
+      origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+      methods: ['GET', 'POST'],
+      credentials: true,
     },
-    
-    // 🚀 PERFORMANCE OPTIMIZATIONS
+
+    // PERFORMANCE OPTIMIZATIONS
     transports: isProduction ? ['websocket'] : ['websocket', 'polling'],
     allowUpgrades: !isProduction,
-    
+
     // Compression for large messages
     perMessageDeflate: {
-      threshold: 1024 // Only compress messages > 1KB
+      threshold: 1024, // Only compress messages > 1KB
     },
-    
+
     // Connection settings
     connectTimeout: 10000,
     pingInterval: 25000,
     pingTimeout: 20000,
-    
+
     // Limit max message size
     maxHttpBufferSize: 1e6, // 1MB
-    
+
     // Connection state recovery (survive brief disconnects)
     connectionStateRecovery: {
       maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
       skipMiddlewares: true,
-    }
+    },
   });
 
-  // 🔥 REDIS ADAPTER - Enable horizontal scaling
+  // REDIS ADAPTER - Enable horizontal scaling
   try {
     const { pubClient, subClient } = await createRedisClients();
     io.adapter(createAdapter(pubClient, subClient));
     console.log('🚀 Redis adapter enabled - Horizontal scaling ready!');
   } catch (error) {
     console.error('❌ Redis adapter failed, using in-memory adapter:', error);
-    console.warn('⚠️  Running in single-server mode. Horizontal scaling disabled.');
+    console.warn(
+      '⚠️  Running in single-server mode. Horizontal scaling disabled.'
+    );
   }
-  
+
   setupEventHandlers();
   return io;
 };
@@ -72,14 +97,14 @@ const setupEventHandlers = (): void => {
     try {
       // Get token from handshake auth or query
       const token = socket.handshake.auth.token || socket.handshake.query.token;
-      
+
       if (!token) {
         console.log('No token provided');
         return next(new Error('Authentication token required'));
       }
 
       // Authenticate user
-      const user = authenticateSocket(token);
+      const user = authenticateSocket(token as string);
       if (!user) {
         console.log('Authentication failed for token');
         return next(new Error('Authentication failed'));
@@ -130,8 +155,8 @@ const handleConnection = (socket: Socket): void => {
     user: {
       id: user.id,
       name: user.name,
-      email: user.email
-    }
+      email: user.email,
+    },
   });
 
   // Handle channel message events
@@ -233,11 +258,16 @@ const handleConnection = (socket: Socket): void => {
 };
 
 // Event handler functions for channel messages
-const handleSendMessageEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleSendMessageEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     // Rate limiting: Max 60 messages per minute
     if (!checkMessageRateLimit(socket.data.user.id, 60, 60000)) {
-      socket.emit('error', { message: 'Rate limit exceeded. Please slow down.' });
+      socket.emit('error', {
+        message: 'Rate limit exceeded. Please slow down.',
+      });
       return;
     }
 
@@ -250,7 +280,10 @@ const handleSendMessageEvent = async (socket: Socket, data: any): Promise<void> 
   }
 };
 
-const handleEditMessageEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleEditMessageEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleEditMessage(socket, data, channelClients, io);
   } catch (error) {
@@ -259,7 +292,10 @@ const handleEditMessageEvent = async (socket: Socket, data: any): Promise<void> 
   }
 };
 
-const handleDeleteMessageEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleDeleteMessageEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleDeleteMessage(socket, data, channelClients);
   } catch (error) {
@@ -268,7 +304,10 @@ const handleDeleteMessageEvent = async (socket: Socket, data: any): Promise<void
   }
 };
 
-const handleForwardMessageEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleForwardMessageEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleForwardMessage(socket, data, channelClients);
   } catch (error) {
@@ -277,16 +316,24 @@ const handleForwardMessageEvent = async (socket: Socket, data: any): Promise<voi
   }
 };
 
-const handleForwardToDirectEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleForwardToDirectEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleForwardDirectMessage(socket, data, conversationClients);
   } catch (error) {
     console.error('Error handling forward to direct message:', error);
-    socket.emit('error', { message: 'Failed to forward message to direct conversation' });
+    socket.emit('error', {
+      message: 'Failed to forward message to direct conversation',
+    });
   }
 };
 
-const handleAddReactionEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleAddReactionEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleAddReaction(socket, data, channelClients);
   } catch (error) {
@@ -295,7 +342,10 @@ const handleAddReactionEvent = async (socket: Socket, data: any): Promise<void> 
   }
 };
 
-const handleRemoveReactionEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleRemoveReactionEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleRemoveReaction(socket, data, channelClients);
   } catch (error) {
@@ -305,11 +355,16 @@ const handleRemoveReactionEvent = async (socket: Socket, data: any): Promise<voi
 };
 
 // Event handler functions for direct messages
-const handleSendDirectMessageEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleSendDirectMessageEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     // Rate limiting: Max 60 messages per minute
     if (!checkMessageRateLimit(socket.data.user.id, 60, 60000)) {
-      socket.emit('error', { message: 'Rate limit exceeded. Please slow down.' });
+      socket.emit('error', {
+        message: 'Rate limit exceeded. Please slow down.',
+      });
       return;
     }
 
@@ -322,7 +377,10 @@ const handleSendDirectMessageEvent = async (socket: Socket, data: any): Promise<
   }
 };
 
-const handleEditDirectMessageEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleEditDirectMessageEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleEditDirectMessage(socket, data, conversationClients);
   } catch (error) {
@@ -331,7 +389,10 @@ const handleEditDirectMessageEvent = async (socket: Socket, data: any): Promise<
   }
 };
 
-const handleDeleteDirectMessageEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleDeleteDirectMessageEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleDeleteDirectMessage(socket, data, conversationClients);
   } catch (error) {
@@ -340,7 +401,10 @@ const handleDeleteDirectMessageEvent = async (socket: Socket, data: any): Promis
   }
 };
 
-const handleAddDirectReactionEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleAddDirectReactionEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleAddDirectReaction(socket, data, conversationClients);
   } catch (error) {
@@ -349,7 +413,10 @@ const handleAddDirectReactionEvent = async (socket: Socket, data: any): Promise<
   }
 };
 
-const handleRemoveDirectReactionEvent = async (socket: Socket, data: any): Promise<void> => {
+const handleRemoveDirectReactionEvent = async (
+  socket: Socket,
+  data: any
+): Promise<void> => {
   try {
     await handleRemoveDirectReaction(socket, data, conversationClients);
   } catch (error) {
@@ -363,14 +430,15 @@ const handleDisconnection = (socket: Socket): void => {
   const user = socket.data.user;
   if (user) {
     console.log(`User ${user.name} disconnected`);
-    
+
     // Remove user from online tracking
     removeUserFromOnlineList(user.id, socket);
     userSockets.delete(socket.id);
-    
+
     // Check if user is still online (has other connections)
-    const isStillOnline = onlineUsers.has(user.id) && onlineUsers.get(user.id)!.size > 0;
-    
+    const isStillOnline =
+      onlineUsers.has(user.id) && onlineUsers.get(user.id)!.size > 0;
+
     // If user is completely offline, broadcast offline status
     if (!isStillOnline) {
       broadcastUserOnlineStatus(user.id, false);
@@ -383,9 +451,13 @@ const handleDisconnection = (socket: Socket): void => {
 };
 
 // Utility functions for WebSocket operations
-export const getWebSocketStats = (): { totalConnections: number; channelStats: Record<string, number>; conversationStats: Record<string, number> } => {
+export const getWebSocketStats = (): {
+  totalConnections: number;
+  channelStats: Record<string, number>;
+  conversationStats: Record<string, number>;
+} => {
   const totalConnections = io.engine.clientsCount;
-  
+
   const channelStats: Record<string, number> = {};
   for (const [channelId, clients] of channelClients.entries()) {
     channelStats[channelId] = clients.size;
@@ -399,11 +471,15 @@ export const getWebSocketStats = (): { totalConnections: number; channelStats: R
   return {
     totalConnections,
     channelStats,
-    conversationStats
+    conversationStats,
   };
 };
 
-export const broadcastToChannel = (channelId: string, event: string, data: any): void => {
+export const broadcastToChannel = (
+  channelId: string,
+  event: string,
+  data: any
+): void => {
   io.to(channelId).emit(event, data);
 };
 
@@ -428,12 +504,12 @@ const broadcastUserOnlineStatus = (userId: string, isOnline: boolean): void => {
   const statusData = {
     userId,
     isOnline,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   };
-  
+
   // Broadcast to all connected users
   io.emit('user_status_change', statusData);
-  
+
   console.log(`User ${userId} is now ${isOnline ? 'online' : 'offline'}`);
 };
 
@@ -448,9 +524,11 @@ export const isUserOnline = (userId: string): boolean => {
 };
 
 // Get online status for multiple users
-export const getUsersOnlineStatus = (userIds: string[]): Record<string, boolean> => {
+export const getUsersOnlineStatus = (
+  userIds: string[]
+): Record<string, boolean> => {
   const status: Record<string, boolean> = {};
-  userIds.forEach(userId => {
+  userIds.forEach((userId) => {
     status[userId] = isUserOnline(userId);
   });
   return status;
@@ -461,10 +539,20 @@ export const getOnlineUsersCount = (): number => {
   return onlineUsers.size;
 };
 
-export const broadcastToConversation = (conversationId: string, event: string, data: any): void => {
+export const broadcastToConversation = (
+  conversationId: string,
+  event: string,
+  data: any
+): void => {
   io.to(conversationId).emit(event, data);
 };
 
-export const sendToUser = (userId: string, event: string, data: any): void => {
+export const sendToUser = (
+  userId: string,
+  event: string,
+  data: any
+): void => {
   io.to(`user_${userId}`).emit(event, data);
-}; 
+};
+
+

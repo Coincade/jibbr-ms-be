@@ -105,4 +105,6 @@ export const handleRemoveReaction = async (
     console.error('Error handling remove reaction:', error);
     socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to remove reaction' });
   }
-}; 
+};
+
+

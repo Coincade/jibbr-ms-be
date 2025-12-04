@@ -1,6 +1,21 @@
-import { Socket, ConversationClientsMap, SendDirectMessageMessage, EditDirectMessageMessage, DeleteDirectMessageMessage, DirectMessageData } from '../types.js';
-import { broadcastToConversation, validateConversationParticipation, getUserInfo, validateChannelMembership } from '../utils.js';
-import { sendDirectMessageSchema, updateMessageSchema } from '../../validation/message.validations.js';
+import {
+  Socket,
+  ConversationClientsMap,
+  SendDirectMessageMessage,
+  EditDirectMessageMessage,
+  DeleteDirectMessageMessage,
+  DirectMessageData,
+} from '../types.js';
+import {
+  broadcastToConversation,
+  validateConversationParticipation,
+  getUserInfo,
+  validateChannelMembership,
+} from '../utils.js';
+import {
+  sendDirectMessageSchema,
+  updateMessageSchema,
+} from '../../validation/message.validations.js';
 import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
 import { isFileAttachmentsEnabledForConversation } from '../../helper.js';
@@ -28,14 +43,18 @@ export const handleSendDirectMessage = async (
     });
 
     // Validate conversation participation
-    const isParticipant = await validateConversationParticipation(socket.data.user.id, data.conversationId);
+    const isParticipant = await validateConversationParticipation(
+      socket.data.user.id,
+      data.conversationId
+    );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
     }
 
     // Check if file attachments are enabled for this conversation (if attachments are provided)
     if (data.attachments && data.attachments.length > 0) {
-      const attachmentsEnabled = await isFileAttachmentsEnabledForConversation(data.conversationId);
+      const attachmentsEnabled =
+        await isFileAttachmentsEnabledForConversation(data.conversationId);
       if (!attachmentsEnabled) {
         throw new Error('File attachments are disabled for this conversation');
       }
@@ -49,17 +68,17 @@ export const handleSendDirectMessage = async (
 
     // Save message to database
     const { default: prisma } = await import('../../config/database.js');
-    
+
     // If replying, check if the original message exists and is not deleted
     if (payload.replyToId) {
       const originalMessage = await prisma.message.findUnique({
-        where: { id: payload.replyToId }
+        where: { id: payload.replyToId },
       });
       if (!originalMessage || originalMessage.deletedAt) {
         throw new Error('Original message not found or has been deleted');
       }
     }
-    
+
     // Prepare message data
     const messageData: any = {
       content: payload.content,
@@ -105,7 +124,7 @@ export const handleSendDirectMessage = async (
 
     // Create attachments if provided
     if (data.attachments && data.attachments.length > 0) {
-      const attachmentData = data.attachments.map(attachment => ({
+      const attachmentData = data.attachments.map((attachment) => ({
         filename: attachment.filename,
         originalName: attachment.originalName,
         mimeType: attachment.mimeType,
@@ -159,11 +178,11 @@ export const handleSendDirectMessage = async (
           ...messageWithAttachments,
           createdAt: messageWithAttachments.createdAt.toISOString(),
           updatedAt: messageWithAttachments.updatedAt.toISOString(),
-          reactions: messageWithAttachments.reactions.map(reaction => ({
+          reactions: messageWithAttachments.reactions.map((reaction) => ({
             ...reaction,
             createdAt: reaction.createdAt.toISOString(),
           })),
-          attachments: messageWithAttachments.attachments.map(attachment => ({
+          attachments: messageWithAttachments.attachments.map((attachment) => ({
             ...attachment,
             createdAt: attachment.createdAt.toISOString(),
           })),
@@ -185,22 +204,26 @@ export const handleSendDirectMessage = async (
       ...message,
       createdAt: message.createdAt.toISOString(),
       updatedAt: message.updatedAt.toISOString(),
-      reactions: message.reactions.map(reaction => ({
+      reactions: message.reactions.map((reaction) => ({
         ...reaction,
         createdAt: reaction.createdAt.toISOString(),
       })),
-      attachments: message.attachments.map(attachment => ({
+      attachments: message.attachments.map((attachment) => ({
         ...attachment,
         createdAt: attachment.createdAt.toISOString(),
       })),
     } as DirectMessageData);
-
   } catch (error) {
     if (error instanceof ZodError) {
       socket.emit('error', { message: 'Invalid message data' });
     } else {
       console.error('Error handling send direct message:', error);
-      socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to send direct message' });
+      socket.emit('error', {
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to send direct message',
+      });
     }
   }
 };
@@ -225,7 +248,10 @@ export const handleEditDirectMessage = async (
     });
 
     // Validate conversation participation
-    const isParticipant = await validateConversationParticipation(socket.data.user.id, data.conversationId);
+    const isParticipant = await validateConversationParticipation(
+      socket.data.user.id,
+      data.conversationId
+    );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
     }
@@ -248,7 +274,7 @@ export const handleEditDirectMessage = async (
       throw new Error('Message does not belong to this conversation');
     }
 
-    const updatedMessage = await prisma.message.update({
+    await prisma.message.update({
       where: { id: data.messageId },
       data: { content: payload.content },
     });
@@ -258,13 +284,17 @@ export const handleEditDirectMessage = async (
       messageId: data.messageId,
       content: payload.content,
     });
-
   } catch (error) {
     if (error instanceof ZodError) {
       socket.emit('error', { message: 'Invalid message data' });
     } else {
       console.error('Error handling edit direct message:', error);
-      socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to edit direct message' });
+      socket.emit('error', {
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to edit direct message',
+      });
     }
   }
 };
@@ -283,7 +313,10 @@ export const handleDeleteDirectMessage = async (
     }
 
     // Validate conversation participation
-    const isParticipant = await validateConversationParticipation(socket.data.user.id, data.conversationId);
+    const isParticipant = await validateConversationParticipation(
+      socket.data.user.id,
+      data.conversationId
+    );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
     }
@@ -314,9 +347,9 @@ export const handleDeleteDirectMessage = async (
     // Soft delete by setting deletedAt timestamp
     await prisma.message.update({
       where: { id: data.messageId },
-      data: { 
+      data: {
         deletedAt: new Date(),
-        content: '[This message was deleted]' // Optional: replace content
+        content: '[This message was deleted]', // Optional: replace content
       },
     });
 
@@ -324,10 +357,14 @@ export const handleDeleteDirectMessage = async (
     socket.to(data.conversationId).emit('direct_message_deleted', {
       messageId: data.messageId,
     });
-
   } catch (error) {
     console.error('Error handling delete direct message:', error);
-    socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to delete direct message' });
+    socket.emit('error', {
+      message:
+        error instanceof Error
+          ? error.message
+          : 'Failed to delete direct message',
+    });
   }
 };
 
@@ -345,7 +382,10 @@ export const handleAddDirectReaction = async (
     }
 
     // Validate conversation participation
-    const isParticipant = await validateConversationParticipation(socket.data.user.id, data.conversationId);
+    const isParticipant = await validateConversationParticipation(
+      socket.data.user.id,
+      data.conversationId
+    );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
     }
@@ -385,10 +425,12 @@ export const handleAddDirectReaction = async (
       ...reaction,
       createdAt: reaction.createdAt.toISOString(),
     });
-
   } catch (error) {
     console.error('Error handling add direct reaction:', error);
-    socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to add reaction' });
+    socket.emit('error', {
+      message:
+        error instanceof Error ? error.message : 'Failed to add reaction',
+    });
   }
 };
 
@@ -406,7 +448,10 @@ export const handleRemoveDirectReaction = async (
     }
 
     // Validate conversation participation
-    const isParticipant = await validateConversationParticipation(socket.data.user.id, data.conversationId);
+    const isParticipant = await validateConversationParticipation(
+      socket.data.user.id,
+      data.conversationId
+    );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
     }
@@ -439,12 +484,14 @@ export const handleRemoveDirectReaction = async (
       emoji: data.emoji,
       userId: socket.data.user.id,
     });
-
   } catch (error) {
     console.error('Error handling remove direct reaction:', error);
-    socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to remove reaction' });
+    socket.emit('error', {
+      message:
+        error instanceof Error ? error.message : 'Failed to remove reaction',
+    });
   }
-}; 
+};
 
 /**
  * Handle forward message to direct conversation event
@@ -460,7 +507,10 @@ export const handleForwardDirectMessage = async (
     }
 
     // Validate conversation participation for target conversation
-    const isTargetParticipant = await validateConversationParticipation(socket.data.user.id, data.targetConversationId);
+    const isTargetParticipant = await validateConversationParticipation(
+      socket.data.user.id,
+      data.targetConversationId
+    );
     if (!isTargetParticipant) {
       throw new Error('You are not a participant of the target conversation');
     }
@@ -497,13 +547,19 @@ export const handleForwardDirectMessage = async (
 
     // If forwarding from a channel, validate channel membership
     if (originalMessage.channelId) {
-      const isSourceMember = await validateChannelMembership(socket.data.user.id, originalMessage.channelId);
+      const isSourceMember = await validateChannelMembership(
+        socket.data.user.id,
+        originalMessage.channelId
+      );
       if (!isSourceMember) {
         throw new Error('You are not a member of the source channel');
       }
     } else if (originalMessage.conversationId) {
       // If forwarding from a direct message, validate conversation participation
-      const isSourceParticipant = await validateConversationParticipation(socket.data.user.id, originalMessage.conversationId);
+      const isSourceParticipant = await validateConversationParticipation(
+        socket.data.user.id,
+        originalMessage.conversationId
+      );
       if (!isSourceParticipant) {
         throw new Error('You are not a participant of the source conversation');
       }
@@ -517,27 +573,15 @@ export const handleForwardDirectMessage = async (
         conversationId: data.targetConversationId,
       },
     });
-
-    // Broadcast to target conversation using Socket.IO
-    socket.to(data.targetConversationId).emit('message_forwarded_to_direct', {
-      originalMessage: {
-        ...originalMessage,
-        createdAt: originalMessage.createdAt.toISOString(),
-        updatedAt: originalMessage.updatedAt.toISOString(),
-        reactions: originalMessage.reactions.map(reaction => ({
-          ...reaction,
-          createdAt: reaction.createdAt.toISOString(),
-        })),
-        attachments: originalMessage.attachments.map(attachment => ({
-          ...attachment,
-          createdAt: attachment.createdAt.toISOString(),
-        })),
-      },
-      targetConversationId: data.targetConversationId,
-    });
-
   } catch (error) {
     console.error('Error handling forward direct message:', error);
-    socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to forward message to direct conversation' });
+    socket.emit('error', {
+      message:
+        error instanceof Error
+          ? error.message
+          : 'Failed to forward message to direct conversation',
+    });
   }
-}; 
+};
+
+

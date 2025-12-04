@@ -5,7 +5,6 @@ import path from 'path';
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
-import { Server } from 'socket.io';
 import { Logger } from '@jibbr/logger';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,7 +45,6 @@ import conversationRoutes from './routes/conversation.route.js';
 import workspaceRoutes from './routes/workspace.route.js';
 import userRoutes from './routes/user.route.js';
 import notificationRoutes from './routes/notification.route.js';
-import presenceRoutes from './routes/presence.route.js';
 import { appLimiter } from './config/rateLimit.js';
 
 app.use('/api/messages', messageRoutes);
@@ -55,24 +53,11 @@ app.use('/api/conversations', conversationRoutes);
 app.use('/api/workspaces', workspaceRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/presence', presenceRoutes);
 
 // Rate limiter
 app.use(appLimiter);
 
-// Initialize WebSocket service
-(async () => {
-  try {
-    const { initializeWebSocketService } = await import('./websocket/index.js');
-    await initializeWebSocketService(httpServer);
-    
-    httpServer.listen(PORT, () => {
-      logger.info(`🚀 Messaging service is running on port ${PORT}`);
-      logger.info(`🔌 WebSocket server running on ws://localhost:${PORT}`);
-    });
-  } catch (error) {
-    logger.error('Failed to initialize server', error as Error);
-    process.exit(1);
-  }
-})();
+httpServer.listen(PORT, () => {
+  logger.info(`🚀 Messaging service is running on port ${PORT}`);
+});
 

@@ -531,17 +531,6 @@ export const handleForwardMessage = async (
             },
           },
         },
-        mentions: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
-              },
-            },
-          },
-        },
       },
     });
 
@@ -558,21 +547,45 @@ export const handleForwardMessage = async (
       },
     });
 
-    // Broadcast to target channel using Socket.IO
-    socket.to(data.targetChannelId).emit('message_forwarded', {
-      originalMessage: {
-        ...originalMessage,
-        createdAt: originalMessage.createdAt.toISOString(),
-        updatedAt: originalMessage.updatedAt.toISOString(),
-        reactions: originalMessage.reactions.map(reaction => ({
-          ...reaction,
-          createdAt: reaction.createdAt.toISOString(),
-        })),
-        attachments: originalMessage.attachments.map(attachment => ({
-          ...attachment,
-          createdAt: attachment.createdAt.toISOString(),
-        })),
-      } as MessageData,
+    // Broadcast forwarded message event to target channel
+    const messageData: MessageData = {
+      id: originalMessage.id,
+      content: originalMessage.content,
+      channelId: data.targetChannelId,
+      userId: originalMessage.userId,
+      createdAt: originalMessage.createdAt.toISOString(),
+      updatedAt: originalMessage.updatedAt.toISOString(),
+      replyToId: originalMessage.replyToId,
+      user: {
+        id: originalMessage.user.id,
+        name: originalMessage.user.name || undefined,
+        image: originalMessage.user.image || undefined,
+      },
+      attachments: originalMessage.attachments.map((attachment) => ({
+        id: attachment.id,
+        filename: attachment.filename,
+        originalName: attachment.originalName,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+        url: attachment.url,
+        createdAt: attachment.createdAt.toISOString(),
+      })),
+      reactions: originalMessage.reactions.map((reaction) => ({
+        id: reaction.id,
+        emoji: reaction.emoji,
+        messageId: reaction.messageId,
+        userId: reaction.userId,
+        createdAt: reaction.createdAt.toISOString(),
+        user: {
+          id: reaction.user.id,
+          name: reaction.user.name || undefined,
+        },
+      })),
+    };
+
+    // Broadcast forwarded message event to target channel (including sender)
+    socket.nsp.to(data.targetChannelId).emit('message_forwarded', {
+      originalMessage: messageData,
       targetChannelId: data.targetChannelId,
     });
 
@@ -580,4 +593,6 @@ export const handleForwardMessage = async (
     console.error('Error handling forward message:', error);
     socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to forward message' });
   }
-}; 
+};
+
+

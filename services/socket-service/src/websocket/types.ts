@@ -331,4 +331,6 @@ export interface AttachmentData {
 export type ChannelClientsMap = Map<string, Set<Socket>>;
 
 // Conversation clients mapping for direct messages
-export type ConversationClientsMap = Map<string, Set<Socket>>; 
+export type ConversationClientsMap = Map<string, Set<Socket>>;
+
+
