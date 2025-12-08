@@ -19,8 +19,8 @@
   },
   "dependencies": {
     "@jibbr/auth-middleware": "*",
+    "@jibbr/database": "*",
     "@jibbr/logger": "*",
-    "@prisma/client": "^6.2.1",
     "@socket.io/redis-adapter": "^8.3.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
