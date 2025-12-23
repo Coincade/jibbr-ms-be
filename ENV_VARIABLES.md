@@ -10,7 +10,10 @@ Required variables:
 ```env
 PORT=3001
 APP_URL=http://localhost:3001
-CLIENT_APP_URL=http://localhost:3000
+# For production, use your deployed website URL:
+CLIENT_APP_URL=https://jibbr-website.vercel.app
+# For local development:
+# CLIENT_APP_URL=http://localhost:3000
 JWT_SECRET=your-super-secret-jwt-key
 DATABASE_URL=postgresql://user:password@host:port/database
 SMTP_USER=your-smtp-user
@@ -30,7 +33,7 @@ DELETE_PASS=your-admin-delete-password
 **Usage:**
 - `PORT` - Service port (default: 3001)
 - `APP_URL` - Base URL for email verification links
-- `CLIENT_APP_URL` - Frontend URL for redirects
+- `CLIENT_APP_URL` - Frontend URL for redirects (password reset, email verification links). **IMPORTANT:** Set this to your deployed website URL in production (e.g., `https://jibbr-website.vercel.app`)
 - `JWT_SECRET` - JWT token signing secret
 - `DATABASE_URL` - PostgreSQL connection string
 - `SMTP_USER`, `SMTP_PASSWORD` - SMTP credentials (Brevo/SendGrid)
