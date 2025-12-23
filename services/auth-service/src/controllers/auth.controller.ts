@@ -27,18 +27,24 @@ export const register = async (req: Request, res: Response) => {
     payload.password = await bcrypt.hash(payload.password, salt);
 
     const token = await bcrypt.hash(uuidv4(), salt);
-    const url = `${process.env.APP_URL}/api/verify/verify-email?email=${payload.email}&token=${token}`;
+    // Send verification link to website, which will handle the API call
+    const url = `${process.env.CLIENT_APP_URL}/verify-email?email=${encodeURIComponent(payload.email)}&token=${encodeURIComponent(token)}`;
     const emailBody = await renderEmailEjs("email-verify", {
       name: payload.name,
       url,
     });
 
-    //Send Email
-    await emailQueue.add(emailQueueName, {
-      to: payload.email,
-      subject: "Jibbr | Verify your email",
-      body: emailBody,
-    });
+    //Send Email (non-blocking - if this fails, user is still created)
+    try {
+      await emailQueue.add(emailQueueName, {
+        to: payload.email,
+        subject: "Jibbr | Verify your email",
+        body: emailBody,
+      });
+    } catch (emailError) {
+      // Log email error but continue with user creation
+      console.error("Failed to queue verification email:", emailError);
+    }
 
     await prisma.user.create({
       data: {
@@ -53,12 +59,26 @@ export const register = async (req: Request, res: Response) => {
       .status(201)
       .json({ message: "Please check your email to verify your account" });
   } catch (error) {
-    // console.log("Error in register controller:", error);
+    console.error("Error in register controller:", error);
+    
     if (error instanceof ZodError) {
       const errors = formatError(error);
-      res.status(422).json({ message: "Invalid data", errors });
+      return res.status(422).json({ message: "Invalid data", errors });
     }
-    return res.status(500).json({ message: "Internal server error" });
+    
+    // Log the actual error for debugging
+    if (error instanceof Error) {
+      console.error("Register error details:", {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      });
+    }
+    
+    return res.status(500).json({ 
+      message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : "Unknown error") : undefined
+    });
   }
 };
 export const login = async (req: Request, res: Response) => {
@@ -113,12 +133,26 @@ export const login = async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    // console.log("Error in Login controller:", error);
+    console.error("Error in login controller:", error);
+    
     if (error instanceof ZodError) {
       const errors = formatError(error);
-      res.status(422).json({ message: "Invalid data", errors });
+      return res.status(422).json({ message: "Invalid data", errors });
     }
-    return res.status(500).json({ message: "Internal server error" });
+    
+    // Log the actual error for debugging
+    if (error instanceof Error) {
+      console.error("Login error details:", {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      });
+    }
+    
+    return res.status(500).json({ 
+      message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : "Unknown error") : undefined
+    });
   }
 };
 export const logout = async (req: Request, res: Response) => {
@@ -126,28 +160,145 @@ export const logout = async (req: Request, res: Response) => {
 };
 
 export const verifyEmail = async (req: Request, res: Response) => {
-  const { email, token } = req.query;
-  if (email && token) {
+  try {
+    const { email, token } = req.query;
+    
+    if (!email || !token) {
+      // Check if this is an API request (Accept header or query param)
+      const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
+      if (isApiRequest) {
+        return res.status(400).json({ 
+          message: "Email and token are required",
+          errors: { email: "Email and token are required" }
+        });
+      }
+      return res.redirect("/verify-error");
+    }
+
     const user = await prisma.user.findUnique({
       where: { email: email as string },
     });
 
-    if (user) {
-      if (token === user.email_verify_token) {
-        //Redirect to front page
-        await prisma.user.update({
-          data: {
-            email_verify_token: null,
-            email_verified_at: new Date().toISOString(),
-          },
-          where: { email: email as string },
+    if (!user) {
+      const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
+      if (isApiRequest) {
+        return res.status(404).json({ 
+          message: "User not found",
+          errors: { email: "User not found with this email" }
         });
-        return res.redirect(`${process.env.CLIENT_APP_URL}/login`);
       }
+      return res.redirect("/verify-error");
     }
-    res.redirect("/verify-error");
+
+    if (token !== user.email_verify_token) {
+      const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
+      if (isApiRequest) {
+        return res.status(422).json({ 
+          message: "Invalid verification token",
+          errors: { token: "Invalid or expired verification token" }
+        });
+      }
+      return res.redirect("/verify-error");
+    }
+
+    // Token is valid, verify the email
+    await prisma.user.update({
+      data: {
+        email_verify_token: null,
+        email_verified_at: new Date().toISOString(),
+      },
+      where: { email: email as string },
+    });
+
+    // Check if this is an API request
+    const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
+    if (isApiRequest) {
+      return res.status(200).json({ 
+        message: "Email verified successfully",
+        data: { email: email as string, verified: true }
+      });
+    }
+
+    // Otherwise redirect to client app login
+    return res.redirect(`${process.env.CLIENT_APP_URL}/login`);
+  } catch (error) {
+    console.error("Error in verifyEmail:", error);
+    const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
+    if (isApiRequest) {
+      return res.status(500).json({ 
+        message: "Internal server error",
+        error: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : "Unknown error") : undefined
+      });
+    }
+    return res.redirect("/verify-error");
   }
-  res.redirect("/verify-error");
+};
+
+export const resendVerificationEmail = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(422).json({ message: "Email is required", errors: { email: "Email is required" } });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      return res.status(422).json({ message: "User not found", errors: { email: "User not found with this email" } });
+    }
+
+    if (user.email_verified_at) {
+      return res.status(422).json({ message: "Email already verified", errors: { email: "Email is already verified" } });
+    }
+
+    // Generate new verification token
+    const salt = await bcrypt.genSalt(10);
+    const token = await bcrypt.hash(uuidv4(), salt);
+    // Send verification link to website, which will handle the API call
+    const url = `${process.env.CLIENT_APP_URL}/verify-email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}`;
+    
+    // Update user with new token
+    await prisma.user.update({
+      data: {
+        email_verify_token: token,
+      },
+      where: { email },
+    });
+
+    // Send Email (non-blocking)
+    try {
+      const emailBody = await renderEmailEjs("email-verify", {
+        name: user.name,
+        url,
+      });
+
+      await emailQueue.add(emailQueueName, {
+        to: email,
+        subject: "Jibbr | Verify your email",
+        body: emailBody,
+      });
+    } catch (emailError) {
+      console.error("Failed to queue verification email:", emailError);
+      // Token is still updated, user can request again if needed
+    }
+
+    return res.status(200).json({ message: "Verification email sent" });
+  } catch (error) {
+    console.error("Error in resendVerificationEmail:", error);
+    
+    if (error instanceof ZodError) {
+      const errors = formatError(error);
+      return res.status(422).json({ message: "Invalid data", errors });
+    }
+    
+    return res.status(500).json({ 
+      message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : "Unknown error") : undefined
+    });
+  }
 };
 
 export const verifyError = async (req: Request, res: Response) => {
@@ -182,26 +333,48 @@ export const forgetPassword = async (req: Request, res: Response) => {
     },
     where:{ email: payload.email}
    })
-   const url = `${process.env.CLIENT_APP_URL}/forget-reset-password?email=${payload.email}&token=${token}`;
+   // Send password reset link to website, which will handle the reset flow
+   const url = `${process.env.CLIENT_APP_URL}/forget-reset-password?email=${encodeURIComponent(payload.email)}&token=${encodeURIComponent(token)}`;
 
    const html = await renderEmailEjs("forget-password", {
     url,
    });
 
-   await emailQueue.add(emailQueueName, {
-    to: payload.email,
-    subject: "Jibbr | Reset Password",
-    body: html,
-   });
+   // Send Email (non-blocking - if this fails, token is still saved)
+   try {
+     await emailQueue.add(emailQueueName, {
+      to: payload.email,
+      subject: "Jibbr | Reset Password",
+      body: html,
+     });
+   } catch (emailError) {
+     // Log email error but don't fail the request
+     console.error("Failed to queue password reset email:", emailError);
+     console.error("Password reset token saved but email not sent. Email:", payload.email);
+   }
 
    return res.status(200).json({message: "Password reset email sent"})
   } catch (error) {
-    // console.log("Error in forgetPassword controller:", error);
+    console.error("Error in forgetPassword controller:", error);
+    
     if (error instanceof ZodError) {
       const errors = formatError(error);
-      res.status(422).json({ message: "Invalid data", errors });
+      return res.status(422).json({ message: "Invalid data", errors });
     }
-    return res.status(500).json({ message: "Internal server error" });
+    
+    // Log the actual error for debugging
+    if (error instanceof Error) {
+      console.error("ForgetPassword error details:", {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      });
+    }
+    
+    return res.status(500).json({ 
+      message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : "Unknown error") : undefined
+    });
   }
 };
 
@@ -243,14 +416,27 @@ export const forgetResetPassword = async (req: Request, res: Response) => {
     return res.status(200).json({message: "Password reset successfully"})
     
     
-  }
-  catch (error) {
-    // console.log("Error in resetPassword controller:", error);
+  } catch (error) {
+    console.error("Error in forgetResetPassword controller:", error);
+    
     if (error instanceof ZodError) {
       const errors = formatError(error);
-      res.status(422).json({ message: "Invalid data", errors });
+      return res.status(422).json({ message: "Invalid data", errors });
     }
-    return res.status(500).json({ message: "Internal server error" });
+    
+    // Log the actual error for debugging
+    if (error instanceof Error) {
+      console.error("ForgetResetPassword error details:", {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      });
+    }
+    
+    return res.status(500).json({ 
+      message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : "Unknown error") : undefined
+    });
   }
 }
 
@@ -296,12 +482,26 @@ export const resetPassword = async (req: Request, res: Response) => {
     return res.status(200).json({ message: "Password changed successfully" });
 
   } catch (error) {
-    // console.log("Error in resetPassword controller:", error);
+    console.error("Error in resetPassword controller:", error);
+    
     if (error instanceof ZodError) {
       const errors = formatError(error);
       return res.status(422).json({ message: "Invalid data", errors });
     }
-    return res.status(500).json({ message: "Internal server error" });
+    
+    // Log the actual error for debugging
+    if (error instanceof Error) {
+      console.error("ResetPassword error details:", {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      });
+    }
+    
+    return res.status(500).json({ 
+      message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : "Unknown error") : undefined
+    });
   }
 };
 

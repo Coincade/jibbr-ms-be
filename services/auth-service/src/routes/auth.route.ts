@@ -1,5 +1,5 @@
 import express, { RequestHandler } from "express";
-import { login, logout, register, getUser, forgetPassword, forgetResetPassword, resetPassword, deleteUser } from "../controllers/auth.controller.js";
+import { login, logout, register, getUser, forgetPassword, forgetResetPassword, resetPassword, deleteUser, resendVerificationEmail } from "../controllers/auth.controller.js";
 import authMiddleware from "../middleware/Auth.middleware.js";
 import { authLimiter } from "../config/rateLimit.js";
 
@@ -8,6 +8,9 @@ const router = express.Router();
 router.post("/register", authLimiter, register as unknown as RequestHandler);
 router.post("/login", authLimiter, login as unknown as RequestHandler);
 // router.post("/logout", authLimiter, logout as unknown as RequestHandler);
+
+//Email Verification Routes
+router.post("/resend-verification", authLimiter, resendVerificationEmail as unknown as RequestHandler);
 
 //Password Routes
 router.post("/forget-password", authLimiter, forgetPassword as unknown as RequestHandler);
