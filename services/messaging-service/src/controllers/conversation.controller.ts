@@ -75,6 +75,9 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
     });
 
     if (existingConversation && existingConversation.participants.length === 2) {
+      // Check if file attachments are enabled for this conversation
+      const attachmentsEnabled = await isFileAttachmentsEnabledForConversation(existingConversation.id);
+      
       return res.status(200).json({
         message: "Conversation found",
         data: {
@@ -87,7 +90,8 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
             createdAt: p.createdAt,
             updatedAt: p.updatedAt
           })),
-          lastMessage: existingConversation.messages[0] || null
+          lastMessage: existingConversation.messages[0] || null,
+          fileAttachmentsEnabled: attachmentsEnabled
         }
       });
     }
@@ -117,6 +121,9 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
       }
     });
 
+    // Check if file attachments are enabled for this conversation
+    const attachmentsEnabled = await isFileAttachmentsEnabledForConversation(conversation.id);
+    
     return res.status(201).json({
       message: "Conversation created successfully",
       data: {
@@ -129,7 +136,8 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
           createdAt: p.createdAt,
           updatedAt: p.updatedAt
         })),
-        lastMessage: null
+        lastMessage: null,
+        fileAttachmentsEnabled: attachmentsEnabled
       }
     });
   } catch (error) {

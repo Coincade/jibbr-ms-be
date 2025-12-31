@@ -94,7 +94,10 @@ app.use(appLimiter);
 // Initialize email queue
 import './jobs/index.js';
 
-app.listen(PORT, () => {
+// Listen on all interfaces (0.0.0.0) to allow connections from emulators and devices
+app.listen(PORT, '0.0.0.0', () => {
   logger.info(`🚀 Auth service is running on port ${PORT}`);
+  logger.info(`📡 Listening on all interfaces (0.0.0.0:${PORT})`);
+  logger.info(`🌐 Accessible at: http://localhost:${PORT} or http://10.0.2.2:${PORT} (Android emulator)`);
 });
 
