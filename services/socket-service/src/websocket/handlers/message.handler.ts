@@ -77,7 +77,7 @@ export const handleSendMessage = async (
       replyToId: payload.replyToId,
     };
 
-    // Create message with attachments if provided
+    // OPTIMIZATION: Create message with minimal includes for faster DB write
     const message = await prisma.message.create({
       data: messageData,
       include: {
@@ -98,83 +98,83 @@ export const handleSendMessage = async (
             },
           },
         },
-        attachments: true,
-        reactions: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-        },
-        mentions: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
-              },
-            },
-          },
-        },
+        // Don't include attachments/reactions/mentions here - we'll add them after
       },
     });
 
-    // Create attachments if provided
-    if (data.attachments && data.attachments.length > 0) {
-      const attachmentData = data.attachments.map(attachment => ({
-        filename: attachment.filename,
-        originalName: attachment.originalName,
-        mimeType: attachment.mimeType,
-        size: attachment.size,
-        url: attachment.url,
-        messageId: message.id,
-      }));
+    // OPTIMIZATION: Broadcast immediately with basic data (Slack-like speed)
+    // Attachments and mentions will be added asynchronously
+    const attachments = data.attachments || [];
+    // Ensure channelId is not null (we're in a channel message handler)
+    const channelId = data.channelId!;
+    const broadcastMessage: MessageData = {
+      id: message.id,
+      content: message.content,
+      channelId: channelId, // Use the validated channelId from data
+      userId: message.userId,
+      createdAt: message.createdAt.toISOString(),
+      updatedAt: message.updatedAt.toISOString(),
+      replyToId: message.replyToId,
+      user: {
+        id: message.user.id,
+        name: message.user.name ?? undefined, // Convert null to undefined
+        image: message.user.image ?? undefined, // Convert null to undefined
+      },
+      attachments: attachments.map((att, idx) => ({
+        id: `temp-${Date.now()}-${idx}`,
+        filename: att.filename,
+        originalName: att.originalName,
+        mimeType: att.mimeType,
+        size: att.size,
+        url: att.url,
+        createdAt: new Date().toISOString(), // Must be ISO string for AttachmentData type
+      })),
+      reactions: [],
+    };
 
-      await prisma.attachment.createMany({
-        data: attachmentData,
-      });
+    // Broadcast immediately (fire and forget) - this is the key to Slack-like speed!
+    io.to(data.channelId!).emit('new_message', broadcastMessage);
 
-      // Fetch the message again with attachments
-      const messageWithAttachments = await prisma.message.findUnique({
-        where: { id: message.id },
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              image: true,
-            },
-          },
-          replyTo: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                },
-              },
-            },
-          },
-          attachments: true,
-          reactions: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                },
-              },
-            },
-          },
-        },
-      });
+    // OPTIMIZATION: Save attachments and process mentions asynchronously (don't block)
+    (async () => {
+      try {
+        // Create attachments if provided
+        if (attachments.length > 0) {
+          const attachmentData = attachments.map(attachment => ({
+            filename: attachment.filename,
+            originalName: attachment.originalName,
+            mimeType: attachment.mimeType,
+            size: attachment.size,
+            url: attachment.url,
+            messageId: message.id,
+          }));
 
-      if (messageWithAttachments) {
-        // [mentions] Create mention records and notifications
+          await prisma.attachment.createMany({
+            data: attachmentData,
+          });
+
+          // Update broadcast with real attachment IDs (optional - for consistency)
+          const savedAttachments = await prisma.attachment.findMany({
+            where: { messageId: message.id },
+          });
+
+          if (savedAttachments.length > 0) {
+            io.to(data.channelId!).emit('message_attachments_updated', {
+              messageId: message.id,
+              attachments: savedAttachments.map(att => ({
+                id: att.id,
+                filename: att.filename,
+                originalName: att.originalName,
+                mimeType: att.mimeType,
+                size: att.size,
+                url: att.url,
+                createdAt: att.createdAt.toISOString(),
+              })),
+            });
+          }
+        }
+
+        // Process mentions asynchronously
         if (mentionedUserIds.length > 0) {
           await createMentionsAndNotifications(
             message.id,
@@ -183,167 +183,52 @@ export const handleSendMessage = async (
             socket.data.user.id,
             io
           );
+
+          // Update broadcast with mentions (optional - for consistency)
+          const savedMentions = await prisma.messageMention.findMany({
+            where: { messageId: message.id },
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  image: true,
+                },
+              },
+            },
+          });
+
+          if (savedMentions.length > 0) {
+            io.to(data.channelId!).emit('message_mentions_updated', {
+              messageId: message.id,
+              mentions: savedMentions.map(mention => ({
+                ...mention,
+                createdAt: mention.createdAt.toISOString(),
+              })),
+            });
+          }
         }
 
-        // Fetch message again with mentions included
-        const messageWithMentions = await prisma.message.findUnique({
-          where: { id: message.id },
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
-              },
-            },
-            replyTo: {
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                  },
-                },
-              },
-            },
-            attachments: true,
-            reactions: {
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                  },
-                },
-              },
-            },
-            mentions: {
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                    image: true,
-                  },
-                },
-              },
-            },
-          },
+        // Create notifications asynchronously
+        const channel = await prisma.channel.findUnique({
+          where: { id: data.channelId },
+          select: { name: true },
         });
 
-        // Broadcast to channel using Socket.IO (to everyone, including sender)
-        io.to(data.channelId!).emit('new_message', {
-          ...messageWithMentions!,
-          createdAt: messageWithMentions!.createdAt.toISOString(),
-          updatedAt: messageWithMentions!.updatedAt.toISOString(),
-          reactions: messageWithMentions!.reactions.map(reaction => ({
-            ...reaction,
-            createdAt: reaction.createdAt.toISOString(),
-          })),
-          attachments: messageWithMentions!.attachments.map(attachment => ({
-            ...attachment,
-            createdAt: attachment.createdAt.toISOString(),
-          })),
-          mentions: messageWithMentions!.mentions.map(mention => ({
-            ...mention,
-            createdAt: mention.createdAt.toISOString(),
-          })),
-        } as MessageData);
-        return;
+        if (channel) {
+          await NotificationService.notifyNewChannelMessage(
+            data.channelId!,
+            message.id,
+            socket.data.user.id,
+            payload.content,
+            channel.name
+          );
+        }
+      } catch (error) {
+        console.error('[MessageHandler] Error in async processing:', error);
+        // Don't throw - message already broadcast
       }
-    }
-    // Get channel info for notifications
-    const channel = await prisma.channel.findUnique({
-      where: { id: data.channelId },
-      select: { name: true },
-    });
-
-    // [mentions] Create mention records and notifications
-    if (mentionedUserIds.length > 0) {
-      await createMentionsAndNotifications(
-        message.id,
-        data.channelId!,
-        mentionedUserIds,
-        socket.data.user.id,
-        io
-      );
-    }
-
-    // Create notifications for channel members (except sender)
-    if (channel) {
-      await NotificationService.notifyNewChannelMessage(
-        data.channelId!,
-        message.id,
-        socket.data.user.id,
-        payload.content,
-        channel.name
-      );
-    }
-
-    // Fetch message again with mentions included
-    const messageWithMentions = await prisma.message.findUnique({
-      where: { id: message.id },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-          },
-        },
-        replyTo: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-        },
-        attachments: true,
-        reactions: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-        },
-        mentions: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // Broadcast to channel using Socket.IO (to everyone, including sender)
-    io.to(data.channelId!).emit('new_message', {
-      ...messageWithMentions!,
-      createdAt: messageWithMentions!.createdAt.toISOString(),
-      updatedAt: messageWithMentions!.updatedAt.toISOString(),
-      reactions: messageWithMentions!.reactions.map(reaction => ({
-        ...reaction,
-        createdAt: reaction.createdAt.toISOString(),
-      })),
-      attachments: messageWithMentions!.attachments.map(attachment => ({
-        ...attachment,
-        createdAt: attachment.createdAt.toISOString(),
-      })),
-      mentions: messageWithMentions!.mentions.map(mention => ({
-        ...mention,
-        createdAt: mention.createdAt.toISOString(),
-      })),
-    } as MessageData);
+    })();
 
   } catch (error) {
     if (error instanceof ZodError) {

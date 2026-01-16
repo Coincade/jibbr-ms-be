@@ -87,7 +87,7 @@ export const handleSendDirectMessage = async (
       replyToId: payload.replyToId,
     };
 
-    // Create message with attachments if provided
+    // OPTIMIZATION: Create message with minimal includes for faster DB write
     const message = await prisma.message.create({
       data: messageData,
       include: {
@@ -108,111 +108,92 @@ export const handleSendDirectMessage = async (
             },
           },
         },
-        attachments: true,
-        reactions: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-        },
+        // Don't include attachments/reactions here - we'll add them after
       },
     });
 
-    // Create attachments if provided
-    if (data.attachments && data.attachments.length > 0) {
-      const attachmentData = data.attachments.map((attachment) => ({
-        filename: attachment.filename,
-        originalName: attachment.originalName,
-        mimeType: attachment.mimeType,
-        size: attachment.size,
-        url: attachment.url,
-        messageId: message.id,
-      }));
-
-      await prisma.attachment.createMany({
-        data: attachmentData,
-      });
-
-      // Fetch the message again with attachments
-      const messageWithAttachments = await prisma.message.findUnique({
-        where: { id: message.id },
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              image: true,
-            },
-          },
-          replyTo: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                },
-              },
-            },
-          },
-          attachments: true,
-          reactions: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                },
-              },
-            },
-          },
-        },
-      });
-
-      if (messageWithAttachments) {
-        // Broadcast to conversation using Socket.IO
-        io.to(data.conversationId).emit('new_direct_message', {
-          ...messageWithAttachments,
-          createdAt: messageWithAttachments.createdAt.toISOString(),
-          updatedAt: messageWithAttachments.updatedAt.toISOString(),
-          reactions: messageWithAttachments.reactions.map((reaction) => ({
-            ...reaction,
-            createdAt: reaction.createdAt.toISOString(),
-          })),
-          attachments: messageWithAttachments.attachments.map((attachment) => ({
-            ...attachment,
-            createdAt: attachment.createdAt.toISOString(),
-          })),
-        } as DirectMessageData);
-        return;
-      }
-    }
-
-    // Create notifications for conversation participants (except sender)
-    await NotificationService.notifyNewDirectMessage(
-      data.conversationId,
-      message.id,
-      socket.data.user.id,
-      payload.content
-    );
-
-    // Broadcast to conversation using Socket.IO
-    io.to(data.conversationId).emit('new_direct_message', {
-      ...message,
+    // OPTIMIZATION: Broadcast immediately with basic data (Slack-like speed)
+    // Attachments will be added asynchronously
+    const attachments = data.attachments || [];
+    const broadcastMessage: DirectMessageData = {
+      id: message.id,
+      content: message.content,
+      conversationId: data.conversationId,
+      userId: message.userId,
       createdAt: message.createdAt.toISOString(),
       updatedAt: message.updatedAt.toISOString(),
-      reactions: message.reactions.map((reaction) => ({
-        ...reaction,
-        createdAt: reaction.createdAt.toISOString(),
+      replyToId: message.replyToId,
+      user: {
+        id: message.user.id,
+        name: message.user.name ?? undefined, // Convert null to undefined
+        image: message.user.image ?? undefined, // Convert null to undefined
+      },
+      attachments: attachments.map((att, idx) => ({
+        id: `temp-${Date.now()}-${idx}`,
+        filename: att.filename,
+        originalName: att.originalName,
+        mimeType: att.mimeType,
+        size: att.size,
+        url: att.url,
+        createdAt: new Date().toISOString(), // Must be ISO string for AttachmentData type
       })),
-      attachments: message.attachments.map((attachment) => ({
-        ...attachment,
-        createdAt: attachment.createdAt.toISOString(),
-      })),
-    } as DirectMessageData);
+      reactions: [],
+    };
+
+    // Broadcast immediately (fire and forget) - this is the key to Slack-like speed!
+    io.to(data.conversationId).emit('new_direct_message', broadcastMessage);
+
+    // OPTIMIZATION: Save attachments and process notifications asynchronously (don't block)
+    (async () => {
+      try {
+        // Create attachments if provided
+        if (attachments.length > 0) {
+          const attachmentData = attachments.map((attachment) => ({
+            filename: attachment.filename,
+            originalName: attachment.originalName,
+            mimeType: attachment.mimeType,
+            size: attachment.size,
+            url: attachment.url,
+            messageId: message.id,
+          }));
+
+          await prisma.attachment.createMany({
+            data: attachmentData,
+          });
+
+          // Update broadcast with real attachment IDs (optional - for consistency)
+          const savedAttachments = await prisma.attachment.findMany({
+            where: { messageId: message.id },
+          });
+
+          if (savedAttachments.length > 0) {
+            io.to(data.conversationId).emit('direct_message_attachments_updated', {
+              messageId: message.id,
+              attachments: savedAttachments.map(att => ({
+                id: att.id,
+                filename: att.filename,
+                originalName: att.originalName,
+                mimeType: att.mimeType,
+                size: att.size,
+                url: att.url,
+                createdAt: att.createdAt.toISOString(),
+              })),
+            });
+          }
+        }
+
+        // Create notifications asynchronously
+        await NotificationService.notifyNewDirectMessage(
+          data.conversationId,
+          message.id,
+          socket.data.user.id,
+          payload.content
+        );
+      } catch (error) {
+        console.error('[DirectMessageHandler] Error in async processing:', error);
+        // Don't throw - message already broadcast
+      }
+    })();
   } catch (error) {
     if (error instanceof ZodError) {
       socket.emit('error', { message: 'Invalid message data' });

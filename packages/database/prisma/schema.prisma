@@ -91,6 +91,9 @@ model ConversationParticipant {
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, userId])
+  // Performance indexes for conversation queries
+  @@index([userId, isActive])
+  @@index([conversationId, isActive])
 }
 
 model Message {
@@ -112,6 +115,12 @@ model Message {
   user              User               @relation(fields: [userId], references: [id])
   mentions          MessageMention[]
   reactions         Reaction[]
+
+  // Performance indexes for fast message queries
+  @@index([channelId, createdAt(sort: Desc)])
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([deletedAt])
 }
 
 model Attachment {
@@ -176,6 +185,9 @@ model ChannelMember {
   user        User      @relation(fields: [userId], references: [id])
 
   @@unique([channelId, userId])
+  // Performance indexes for membership checks
+  @@index([userId, channelId, isActive])
+  @@index([channelId, isActive])
 }
 
 model UserNotification {
