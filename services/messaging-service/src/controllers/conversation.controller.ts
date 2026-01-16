@@ -3,6 +3,7 @@ import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
 import { ZodError } from "zod";
+import { publishMessageCreatedEvent, publishMessageDeletedEvent } from "../services/kafka-publisher.service.js";
 
 // Get or create conversation between two users
 export const getOrCreateConversation = async (req: Request, res: Response) => {
@@ -33,19 +34,33 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
     }
 
     // Check if conversation already exists
+    // Find conversations where both users are active participants
     const existingConversation = await prisma.conversation.findFirst({
       where: {
-        participants: {
-          every: {
-            userId: {
-              in: [user.id, targetUserId]
-            },
-            isActive: true
+        AND: [
+          {
+            participants: {
+              some: {
+                userId: user.id,
+                isActive: true
+              }
+            }
+          },
+          {
+            participants: {
+              some: {
+                userId: targetUserId,
+                isActive: true
+              }
+            }
           }
-        }
+        ]
       },
       include: {
         participants: {
+          where: {
+            isActive: true
+          },
           include: {
             user: {
               select: {
@@ -57,6 +72,9 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
           }
         },
         messages: {
+          where: {
+            deletedAt: null
+          },
           orderBy: {
             createdAt: 'desc'
           },
@@ -101,8 +119,8 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
       data: {
         participants: {
           create: [
-            { userId: user.id },
-            { userId: targetUserId }
+            { userId: user.id, isActive: true },
+            { userId: targetUserId, isActive: true }
           ]
         }
       },
@@ -154,6 +172,9 @@ export const getUserConversations = async (req: Request, res: Response) => {
       return res.status(422).json({ message: "User not found" });
     }
 
+    console.log('[getUserConversations] Fetching conversations for user:', user.id);
+
+    // Find all conversations where the user is an active participant
     const conversations = await prisma.conversation.findMany({
       where: {
         participants: {
@@ -165,6 +186,9 @@ export const getUserConversations = async (req: Request, res: Response) => {
       },
       include: {
         participants: {
+          where: {
+            isActive: true  // Only include active participants in the response
+          },
           include: {
             user: {
               select: {
@@ -176,6 +200,9 @@ export const getUserConversations = async (req: Request, res: Response) => {
           }
         },
         messages: {
+          where: {
+            deletedAt: null  // Exclude soft-deleted messages
+          },
           orderBy: {
             createdAt: 'desc'
           },
@@ -196,9 +223,13 @@ export const getUserConversations = async (req: Request, res: Response) => {
       }
     });
 
-    return res.status(200).json({
-      message: "Conversations fetched successfully",
-      data: conversations.map(conv => ({
+    console.log('[getUserConversations] Found', conversations.length, 'conversations');
+
+    const responseData = conversations.map(conv => {
+      // Filter out the current user from participants for cleaner response
+      const otherParticipants = conv.participants.filter(p => p.userId !== user.id);
+      
+      return {
         id: conv.id,
         participants: conv.participants.map(p => ({
           id: p.id,
@@ -209,7 +240,12 @@ export const getUserConversations = async (req: Request, res: Response) => {
           updatedAt: p.updatedAt
         })),
         lastMessage: conv.messages[0] || null
-      }))
+      };
+    });
+
+    return res.status(200).json({
+      message: "Conversations fetched successfully",
+      data: responseData
     });
   } catch (error) {
     console.error('Error in getUserConversations:', error);
@@ -400,6 +436,11 @@ export const sendDirectMessage = async (req: Request, res: Response) => {
       }
     });
 
+    // Publish Kafka event (async, don't await)
+    publishMessageCreatedEvent(message).catch(err => 
+      console.error('[Kafka] Failed to publish message.created event:', err)
+    );
+
     return res.status(201).json({
       message: "Direct message sent successfully",
       data: {
@@ -526,6 +567,11 @@ export const sendDirectMessageWithAttachments = async (req: Request, res: Respon
       }
     });
 
+    // Publish Kafka event (async, don't await)
+    publishMessageCreatedEvent(message).catch(err => 
+      console.error('[Kafka] Failed to publish message.created event:', err)
+    );
+
     return res.status(201).json({
       message: "Direct message sent successfully",
       data: {
@@ -599,13 +645,18 @@ export const deleteDirectMessage = async (req: Request, res: Response) => {
     }
 
     // Soft delete the message
-    await prisma.message.update({
+    const deletedMessage = await prisma.message.update({
       where: { id: messageId },
       data: { 
         deletedAt: new Date(),
         content: '[This message was deleted]' // Optional: replace content
       },
     });
+
+    // Publish Kafka event (async, don't await)
+    publishMessageDeletedEvent(deletedMessage).catch(err => 
+      console.error('[Kafka] Failed to publish message.deleted event:', err)
+    );
 
     return res.status(200).json({
       message: "Direct message deleted successfully",

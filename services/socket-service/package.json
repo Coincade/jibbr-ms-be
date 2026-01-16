@@ -20,6 +20,7 @@
   "dependencies": {
     "@jibbr/auth-middleware": "*",
     "@jibbr/database": "*",
+    "@jibbr/kafka-client": "*",
     "@jibbr/logger": "*",
     "@socket.io/redis-adapter": "^8.3.0",
     "cors": "^2.8.5",

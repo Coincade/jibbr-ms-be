@@ -87,6 +87,20 @@ export const initializeWebSocketService = async (
   }
 
   setupEventHandlers();
+  
+  // Initialize Kafka consumer for broadcasting events
+  (async () => {
+    try {
+      const { setSocketIOInstance, startKafkaConsumer } = await import('../services/kafka-consumer.service.js');
+      setSocketIOInstance(io);
+      await startKafkaConsumer();
+      console.log('✅ Kafka consumer initialized for WebSocket broadcasting');
+    } catch (error) {
+      console.error('❌ Failed to initialize Kafka consumer:', error);
+      // Don't crash the service, but log the error
+    }
+  })();
+  
   return io;
 };
 

@@ -3,6 +3,7 @@ import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from "../services/mention.service.js"; // [mentions]
+import { publishMessageCreatedEvent, publishMessageUpdatedEvent, publishMessageDeletedEvent } from "../services/kafka-publisher.service.js";
 import {
   sendMessageSchema,
   reactToMessageSchema,
@@ -121,6 +122,11 @@ export const sendMessage = async (req: Request, res: Response) => {
         null // io not available in HTTP controller, handled in websocket
       ).catch(err => console.error('[mentions] Failed to process mentions:', err));
     }
+
+    // Publish Kafka event (async, don't await)
+    publishMessageCreatedEvent(message).catch(err => 
+      console.error('[Kafka] Failed to publish message.created event:', err)
+    );
 
     return res.status(201).json({
       message: "Message sent successfully",
@@ -264,6 +270,11 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
         null // io not available in HTTP controller, handled in websocket
       ).catch(err => console.error('[mentions] Failed to process mentions:', err));
     }
+
+    // Publish Kafka event (async, don't await)
+    publishMessageCreatedEvent(message).catch(err => 
+      console.error('[Kafka] Failed to publish message.created event:', err)
+    );
 
     return res.status(201).json({
       message: "Message sent successfully",
@@ -611,6 +622,11 @@ export const updateMessage = async (req: Request, res: Response) => {
       null // io not available in HTTP controller
     ).catch(err => console.error('[mentions] Failed to update mentions:', err));
 
+    // Publish Kafka event (async, don't await)
+    publishMessageUpdatedEvent(updatedMessage).catch(err => 
+      console.error('[Kafka] Failed to publish message.updated event:', err)
+    );
+
     return res.status(200).json({
       message: "Message updated successfully",
       data: updatedMessage,
@@ -679,13 +695,18 @@ export const deleteMessage = async (req: Request, res: Response) => {
     }
 
     // Soft delete the message
-    await prisma.message.update({
+    const deletedMessage = await prisma.message.update({
       where: { id: payload.messageId },
       data: { 
         deletedAt: new Date(),
         content: '[This message was deleted]' // Optional: replace content
       },
     });
+
+    // Publish Kafka event (async, don't await)
+    publishMessageDeletedEvent(deletedMessage).catch(err => 
+      console.error('[Kafka] Failed to publish message.deleted event:', err)
+    );
 
     return res.status(200).json({
       message: "Message deleted successfully",
