@@ -133,7 +133,14 @@ export const handleSendMessage = async (
     };
 
     // Broadcast immediately (fire and forget) - this is the key to Slack-like speed!
-    io.to(data.channelId!).emit('new_message', broadcastMessage);
+    // Use socket.to() to exclude sender and avoid duplicate messages (sender gets message_sent)
+    socket.to(data.channelId!).emit('new_message', broadcastMessage);
+    
+    // Send confirmation to sender with actual message ID (to replace optimistic message)
+    socket.emit('message_sent', {
+      ...broadcastMessage,
+      id: message.id, // Ensure we use the real message ID
+    });
 
     // OPTIMIZATION: Save attachments and process mentions asynchronously (don't block)
     (async () => {
