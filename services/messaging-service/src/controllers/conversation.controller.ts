@@ -5,7 +5,7 @@ import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
 import { ZodError } from "zod";
 import { publishMessageCreatedEvent, publishMessageDeletedEvent } from "../services/kafka-publisher.service.js";
 
-// Get or create conversation between two users
+// Get or create conversation between two users (workspace-specific)
 export const getOrCreateConversation = async (req: Request, res: Response) => {
   try {
     const user = req.user;
@@ -14,29 +14,70 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
     }
 
     const { targetUserId } = req.params;
+    const { workspaceId } = req.query;
 
     if (!targetUserId) {
       return res.status(400).json({ message: "Target user ID is required" });
+    }
+
+    if (!workspaceId || typeof workspaceId !== 'string') {
+      return res.status(400).json({ message: "Workspace ID is required" });
     }
 
     if (user.id === targetUserId) {
       return res.status(400).json({ message: "Cannot create conversation with yourself" });
     }
 
-    // Check if target user exists
+    // Verify workspace exists and user is a member
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      include: {
+        members: {
+          where: {
+            userId: user.id,
+            isActive: true
+          }
+        }
+      }
+    });
+
+    if (!workspace) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
+    if (workspace.members.length === 0) {
+      return res.status(403).json({ message: "You are not a member of this workspace" });
+    }
+
+    // Check if target user exists and is a member of the workspace
     const targetUser = await prisma.user.findUnique({
       where: { id: targetUserId },
-      select: { id: true, name: true, image: true }
+      select: { 
+        id: true, 
+        name: true, 
+        image: true,
+        members: {
+          where: {
+            workspaceId: workspaceId,
+            isActive: true
+          }
+        }
+      }
     });
 
     if (!targetUser) {
       return res.status(404).json({ message: "Target user not found" });
     }
 
-    // Check if conversation already exists
-    // Find conversations where both users are active participants
+    if (targetUser.members.length === 0) {
+      return res.status(403).json({ message: "Target user is not a member of this workspace" });
+    }
+
+    // Check if conversation already exists in this workspace
+    // Find conversations where both users are active participants AND it's in this workspace
     const existingConversation = await prisma.conversation.findFirst({
       where: {
+        workspaceId: workspaceId, // Filter by workspace
         AND: [
           {
             participants: {
@@ -100,6 +141,7 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
         message: "Conversation found",
         data: {
           id: existingConversation.id,
+          workspaceId: existingConversation.workspaceId,
           participants: existingConversation.participants.map(p => ({
             id: p.id,
             userId: p.userId,
@@ -114,9 +156,10 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
       });
     }
 
-    // Create new conversation
+    // Create new conversation in this workspace
     const conversation = await prisma.conversation.create({
       data: {
+        workspaceId: workspaceId, // Associate with workspace
         participants: {
           create: [
             { userId: user.id, isActive: true },
@@ -146,6 +189,7 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
       message: "Conversation created successfully",
       data: {
         id: conversation.id,
+        workspaceId: conversation.workspaceId,
         participants: conversation.participants.map(p => ({
           id: p.id,
           userId: p.userId,
@@ -164,7 +208,7 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
   }
 };
 
-// Get user's conversations
+// Get user's conversations (workspace-specific)
 export const getUserConversations = async (req: Request, res: Response) => {
   try {
     const user = req.user;
@@ -172,18 +216,27 @@ export const getUserConversations = async (req: Request, res: Response) => {
       return res.status(422).json({ message: "User not found" });
     }
 
-    console.log('[getUserConversations] Fetching conversations for user:', user.id);
+    const { workspaceId } = req.query;
+
+    // Build where clause - filter by workspace if provided
+    const whereClause: any = {
+      participants: {
+        some: {
+          userId: user.id,
+          isActive: true
+        }
+      }
+    };
+
+    if (workspaceId && typeof workspaceId === 'string') {
+      whereClause.workspaceId = workspaceId;
+    }
+
+    console.log('[getUserConversations] Fetching conversations for user:', user.id, 'workspaceId:', workspaceId || 'all');
 
     // Find all conversations where the user is an active participant
     const conversations = await prisma.conversation.findMany({
-      where: {
-        participants: {
-          some: {
-            userId: user.id,
-            isActive: true
-          }
-        }
-      },
+      where: whereClause,
       include: {
         participants: {
           where: {
@@ -231,6 +284,7 @@ export const getUserConversations = async (req: Request, res: Response) => {
       
       return {
         id: conv.id,
+        workspaceId: conv.workspaceId,
         participants: conv.participants.map(p => ({
           id: p.id,
           userId: p.userId,

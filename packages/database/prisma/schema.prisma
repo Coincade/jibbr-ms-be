@@ -50,6 +50,7 @@ model Workspace {
   fileAttachmentsEnabled Boolean   @default(true)
   channels               Channel[]
   members                Member[]
+  conversations          Conversation[]
   user                   User      @relation(fields: [userId], references: [id])
 }
 
@@ -74,10 +75,17 @@ model Conversation {
   id                String                    @id @unique @default(cuid())
   createdAt         DateTime                  @default(now())
   updatedAt         DateTime                  @default(now()) @updatedAt
+  
+  // Workspace-specific DMs - each DM conversation belongs to a workspace
+  workspaceId       String
+  workspace         Workspace                 @relation(fields: [workspaceId], references: [id])
+  
   participants      ConversationParticipant[]
   readStatuses      ConversationReadStatus[]
   forwardedMessages ForwardedMessage[]
   messages          Message[]
+  
+  @@index([workspaceId])
 }
 
 model ConversationParticipant {
