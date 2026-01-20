@@ -143,15 +143,16 @@ export const validateConversationParticipation = async (userId: string, conversa
 };
 
 /**
- * Get or create conversation between two users
+ * Get or create conversation between two users (workspace-specific)
  */
-export const getOrCreateConversation = async (userId1: string, userId2: string): Promise<string> => {
+export const getOrCreateConversation = async (userId1: string, userId2: string, workspaceId: string): Promise<string> => {
   try {
     const { default: prisma } = await import('../config/database.js');
     
-    // Check if conversation already exists
+    // Check if conversation already exists in this workspace
     const existingConversation = await prisma.conversation.findFirst({
       where: {
+        workspaceId: workspaceId,
         participants: {
           every: {
             userId: {
@@ -170,9 +171,10 @@ export const getOrCreateConversation = async (userId1: string, userId2: string):
       return existingConversation.id;
     }
     
-    // Create new conversation
+    // Create new conversation in this workspace
     const conversation = await prisma.conversation.create({
       data: {
+        workspaceId: workspaceId,
         participants: {
           create: [
             { userId: userId1 },
