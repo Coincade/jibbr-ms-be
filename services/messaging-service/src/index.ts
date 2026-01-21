@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import { createServer } from 'http';
 import { Logger } from '@jibbr/logger';
 import prisma from './config/database.js';
@@ -49,6 +50,7 @@ app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
   credentials: true,
 }));
+app.use(compression());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 

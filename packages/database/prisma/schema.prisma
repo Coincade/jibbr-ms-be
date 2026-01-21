@@ -126,9 +126,12 @@ model Message {
 
   // Performance indexes for fast message queries
   @@index([channelId, createdAt(sort: Desc)])
+  @@index([channelId, deletedAt, createdAt(sort: Desc)])
   @@index([conversationId, createdAt(sort: Desc)])
+  @@index([conversationId, deletedAt, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@index([deletedAt])
+  @@index([replyToId])
 }
 
 model Attachment {

@@ -57,6 +57,7 @@ export const getMessagesSchema = z.object({
   channelId: z.string().min(1, "Channel ID is required"),
   page: z.coerce.number().min(1, "Page must be at least 1").default(1),
   limit: z.coerce.number().min(1, "Limit must be at least 1").max(100, "Limit too high").default(20),
+  before: z.string().optional(),
 });
 
 // Get message by ID validation

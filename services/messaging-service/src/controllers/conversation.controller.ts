@@ -309,6 +309,9 @@ export const getUserConversations = async (req: Request, res: Response) => {
 
 // Get conversation messages
 export const getConversationMessages = async (req: Request, res: Response) => {
+  const startAt = Date.now();
+  let queryMs = 0;
+  let countMs = 0;
   try {
     const user = req.user;
     if (!user) {
@@ -316,7 +319,11 @@ export const getConversationMessages = async (req: Request, res: Response) => {
     }
 
     const { conversationId } = req.params;
-    const { page = 1, limit = 50 } = req.query;
+    const { page = 1, limit = 50, before } = req.query;
+    const beforeDate = before ? new Date(String(before)) : null;
+    if (beforeDate && Number.isNaN(beforeDate.getTime())) {
+      return res.status(400).json({ message: "Invalid before cursor" });
+    }
 
     // Check if user is participant of the conversation
     const participant = await prisma.conversationParticipant.findFirst({
@@ -331,12 +338,15 @@ export const getConversationMessages = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a participant of this conversation" });
     }
 
-    const skip = (Number(page) - 1) * Number(limit);
+    const useCursor = !!beforeDate;
+    const skip = useCursor ? 0 : (Number(page) - 1) * Number(limit);
+    const queryStartAt = Date.now();
 
     const messages = await prisma.message.findMany({
       where: {
         conversationId,
         deletedAt: null, // Exclude soft-deleted messages
+        ...(useCursor && beforeDate ? { createdAt: { lt: beforeDate } } : {}),
       },
       include: {
         user: {
@@ -374,13 +384,17 @@ export const getConversationMessages = async (req: Request, res: Response) => {
       skip,
       take: Number(limit)
     });
+    queryMs = Date.now() - queryStartAt;
 
+    const countStartAt = Date.now();
     const total = await prisma.message.count({
       where: {
         conversationId,
         deletedAt: null // Exclude soft-deleted messages
       }
     });
+    countMs = Date.now() - countStartAt;
+    const nextCursor = messages.length > 0 ? messages[messages.length - 1].createdAt.toISOString() : null;
 
     return res.status(200).json({
       message: "Messages fetched successfully",
@@ -398,6 +412,7 @@ export const getConversationMessages = async (req: Request, res: Response) => {
             createdAt: attachment.createdAt.toISOString()
           }))
         })),
+        nextCursor,
         pagination: {
           page: Number(page),
           limit: Number(limit),
@@ -409,6 +424,17 @@ export const getConversationMessages = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error in getConversationMessages:', error);
     return res.status(500).json({ message: "Internal server error" });
+  } finally {
+    const totalMs = Date.now() - startAt;
+    console.log('[getConversationMessages] timings:', {
+      conversationId: req.params?.conversationId,
+      page: req.query?.page,
+      limit: req.query?.limit,
+      before: req.query?.before,
+      queryMs,
+      countMs,
+      totalMs,
+    });
   }
 };
 

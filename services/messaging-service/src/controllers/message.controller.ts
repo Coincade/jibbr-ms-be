@@ -291,6 +291,9 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
 
 // Get messages from a channel
 export const getMessages = async (req: Request, res: Response) => {
+  const startAt = Date.now();
+  let queryMs = 0;
+  let countMs = 0;
   try {
     const user = req.user;
     if (!user) {
@@ -299,6 +302,11 @@ export const getMessages = async (req: Request, res: Response) => {
 
     const query = req.query;
     const payload = getMessagesSchema.parse(query);
+    const before = payload.before;
+    const beforeDate = before ? new Date(before) : null;
+    if (beforeDate && Number.isNaN(beforeDate.getTime())) {
+      return res.status(400).json({ message: "Invalid before cursor" });
+    }
 
     // Check if user is member of the channel
     const channelMember = await prisma.channelMember.findFirst({
@@ -313,12 +321,15 @@ export const getMessages = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
-    const skip = (payload.page - 1) * payload.limit;
+    const useCursor = !!beforeDate;
+    const skip = useCursor ? 0 : (payload.page - 1) * payload.limit;
+    const queryStartAt = Date.now();
 
     const messages = await prisma.message.findMany({
       where: {
         channelId: payload.channelId,
         deletedAt: null, // Exclude soft-deleted messages
+        ...(useCursor && beforeDate ? { createdAt: { lt: beforeDate } } : {}),
       },
       include: {
         user: {
@@ -360,11 +371,6 @@ export const getMessages = async (req: Request, res: Response) => {
             },
           },
         },
-        _count: {
-          select: {
-            replies: true,
-          },
-        },
       },
       orderBy: {
         createdAt: "desc",
@@ -372,18 +378,23 @@ export const getMessages = async (req: Request, res: Response) => {
       skip,
       take: payload.limit,
     });
+    queryMs = Date.now() - queryStartAt;
 
+    const countStartAt = Date.now();
     const total = await prisma.message.count({
       where: {
         channelId: payload.channelId,
         deletedAt: null, // Exclude soft-deleted messages
       },
     });
+    countMs = Date.now() - countStartAt;
+    const nextCursor = messages.length > 0 ? messages[messages.length - 1].createdAt.toISOString() : null;
 
     return res.status(200).json({
       message: "Messages fetched successfully",
       data: {
         messages,
+        nextCursor,
         pagination: {
           page: payload.page,
           limit: payload.limit,
@@ -398,6 +409,17 @@ export const getMessages = async (req: Request, res: Response) => {
       return res.status(422).json({ message: "Invalid data", errors });
     }
     return res.status(500).json({ message: "Internal server error" });
+  } finally {
+    const totalMs = Date.now() - startAt;
+    console.log('[getMessages] timings:', {
+      channelId: req.query?.channelId,
+      page: req.query?.page,
+      limit: req.query?.limit,
+      before: req.query?.before,
+      queryMs,
+      countMs,
+      totalMs,
+    });
   }
 };
 
