@@ -164,8 +164,30 @@ export const verifyEmail = async (req: Request, res: Response) => {
     const { email, token } = req.query;
     
     if (!email || !token) {
-      // Check if this is an API request (Accept header or query param)
       const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
+      if (!email) {
+        if (isApiRequest) {
+          return res.status(400).json({ 
+            message: "Email is required",
+            errors: { email: "Email is required" }
+          });
+        }
+        return res.redirect("/verify-error");
+      }
+
+      const existingUser = await prisma.user.findUnique({
+        where: { email: email as string },
+      });
+      if (existingUser?.email_verified_at) {
+        if (isApiRequest) {
+          return res.status(200).json({
+            message: "Email already verified",
+            data: { email: email as string, verified: true, alreadyVerified: true }
+          });
+        }
+        return res.redirect(`${process.env.CLIENT_APP_URL}/verify-email?already_verified=1&email=${encodeURIComponent(String(email))}`);
+      }
+
       if (isApiRequest) {
         return res.status(400).json({ 
           message: "Email and token are required",
@@ -188,6 +210,17 @@ export const verifyEmail = async (req: Request, res: Response) => {
         });
       }
       return res.redirect("/verify-error");
+    }
+
+    if (user.email_verified_at) {
+      const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
+      if (isApiRequest) {
+        return res.status(200).json({ 
+          message: "Email already verified",
+          data: { email: email as string, verified: true, alreadyVerified: true }
+        });
+      }
+      return res.redirect(`${process.env.CLIENT_APP_URL}/verify-email?already_verified=1&email=${encodeURIComponent(String(email))}`);
     }
 
     if (token !== user.email_verify_token) {
@@ -219,8 +252,8 @@ export const verifyEmail = async (req: Request, res: Response) => {
       });
     }
 
-    // Otherwise redirect to client app login
-    return res.redirect(`${process.env.CLIENT_APP_URL}/login`);
+    // Otherwise redirect to client app success page
+    return res.redirect(`${process.env.CLIENT_APP_URL}/verify-email?email=${encodeURIComponent(String(email))}&verified=1`);
   } catch (error) {
     console.error("Error in verifyEmail:", error);
     const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
