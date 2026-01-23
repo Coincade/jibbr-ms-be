@@ -66,39 +66,20 @@ export const isFileAttachmentsEnabledForConversation = async (
   conversationId: string
 ): Promise<boolean> => {
   try {
-    const participants = await prisma.conversationParticipant.findMany({
+    const conversation = await prisma.conversation.findUnique({
       where: {
-        conversationId,
-        isActive: true,
+        id: conversationId,
       },
-      include: {
-        user: {
-          include: {
-            workspaces: {
-              where: {
-                isActive: true,
-                deletedAt: null,
-              },
-              select: {
-                fileAttachmentsEnabled: true,
-              },
-            },
+      select: {
+        workspace: {
+          select: {
+            fileAttachmentsEnabled: true,
           },
         },
       },
     });
 
-    for (const participant of participants) {
-      const hasEnabledWorkspace = participant.user.workspaces.some(
-        (workspace) => workspace.fileAttachmentsEnabled
-      );
-
-      if (!hasEnabledWorkspace) {
-        return false;
-      }
-    }
-
-    return true;
+    return conversation?.workspace?.fileAttachmentsEnabled ?? true;
   } catch (error) {
     console.error(
       'Error checking file attachments setting for conversation:',

@@ -83,48 +83,26 @@ export const isFileAttachmentsEnabledForChannel = async (channelId: string): Pro
 }
 
 /**
- * Check if file attachments are enabled for a conversation's participants' workspaces
- * For direct messages, we need to check if ALL participants' workspaces allow attachments
+ * Check if file attachments are enabled for a conversation's workspace
  * @param conversationId - The conversation ID to check
- * @returns Promise<boolean> - True if attachments are enabled for all participants' workspaces, false otherwise
+ * @returns Promise<boolean> - True if attachments are enabled for the workspace, false otherwise
  */
 export const isFileAttachmentsEnabledForConversation = async (conversationId: string): Promise<boolean> => {
     try {
-        // Get all participants of the conversation
-        const participants = await prisma.conversationParticipant.findMany({
+        const conversation = await prisma.conversation.findUnique({
             where: {
-                conversationId,
-                isActive: true,
+                id: conversationId,
             },
-            include: {
-                user: {
-                    include: {
-                        workspaces: {
-                            where: {
-                                isActive: true,
-                                deletedAt: null,
-                            },
-                            select: {
-                                fileAttachmentsEnabled: true,
-                            },
-                        },
+            select: {
+                workspace: {
+                    select: {
+                        fileAttachmentsEnabled: true,
                     },
                 },
             },
         });
 
-        // Check if all participants have at least one workspace with attachments enabled
-        for (const participant of participants) {
-            const hasEnabledWorkspace = participant.user.workspaces.some(
-                workspace => workspace.fileAttachmentsEnabled
-            );
-            
-            if (!hasEnabledWorkspace) {
-                return false;
-            }
-        }
-
-        return true; // All participants have at least one workspace with attachments enabled
+        return conversation?.workspace?.fileAttachmentsEnabled ?? true;
     } catch (error) {
         console.error('Error checking file attachments setting for conversation:', error);
         return true; // Default to true on error
