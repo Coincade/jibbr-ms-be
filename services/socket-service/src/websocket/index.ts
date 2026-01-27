@@ -10,6 +10,8 @@ import {
   addClientToChannel,
   removeClientFromAllConversations,
   addClientToConversation,
+  validateChannelMembership,
+  validateConversationParticipation,
 } from './utils.js';
 import {
   handleSendMessage,
@@ -251,6 +253,64 @@ const handleConnection = (socket: Socket): void => {
     removeClientFromAllConversations(socket, conversationClients);
     socket.emit('conversation_left', { conversationId });
     console.log(`User ${user.name} left conversation: ${conversationId}`);
+  });
+
+  // Typing indicator events - channels
+  socket.on('typing_start', async (data) => {
+    const { channelId } = data || {};
+    if (!channelId) return;
+    const isMember = await validateChannelMembership(user.id, channelId);
+    if (!isMember) return;
+    addClientToChannel(socket, channelId, channelClients);
+    socket.to(channelId).emit('typing_start', {
+      userId: user.id,
+      userName: user.name,
+      channelId,
+    });
+  });
+
+  socket.on('typing_stop', async (data) => {
+    const { channelId } = data || {};
+    if (!channelId) return;
+    const isMember = await validateChannelMembership(user.id, channelId);
+    if (!isMember) return;
+    socket.to(channelId).emit('typing_stop', {
+      userId: user.id,
+      userName: user.name,
+      channelId,
+    });
+  });
+
+  // Typing indicator events - direct conversations
+  socket.on('direct_typing_start', async (data) => {
+    const { conversationId } = data || {};
+    if (!conversationId) return;
+    const isParticipant = await validateConversationParticipation(
+      user.id,
+      conversationId
+    );
+    if (!isParticipant) return;
+    addClientToConversation(socket, conversationId, conversationClients);
+    socket.to(conversationId).emit('direct_typing_start', {
+      userId: user.id,
+      userName: user.name,
+      conversationId,
+    });
+  });
+
+  socket.on('direct_typing_stop', async (data) => {
+    const { conversationId } = data || {};
+    if (!conversationId) return;
+    const isParticipant = await validateConversationParticipation(
+      user.id,
+      conversationId
+    );
+    if (!isParticipant) return;
+    socket.to(conversationId).emit('direct_typing_stop', {
+      userId: user.id,
+      userName: user.name,
+      conversationId,
+    });
   });
 
   // Ping/Pong for connection health
