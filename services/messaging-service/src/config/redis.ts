@@ -72,3 +72,12 @@ export const createStateRedisClient = async () => {
   return client;
 };
 
+// Stream client for Valkey Streams (messaging-service publishers)
+export const createStreamRedisClient = async () => {
+  const client = createClient({ url: redisUrl });
+  client.on('error', (err: Error) => console.error('❌ Redis Stream Error:', err));
+  await client.connect();
+  console.log('✅ Redis Stream client connected');
+  return client;
+};
+

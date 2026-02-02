@@ -23,7 +23,6 @@
   "dependencies": {
     "@jibbr/auth-middleware": "*",
     "@jibbr/database": "*",
-    "@jibbr/kafka-client": "*",
     "@jibbr/logger": "*",
     "@jibbr/shared-types": "*",
     "@jibbr/shared-utils": "*",

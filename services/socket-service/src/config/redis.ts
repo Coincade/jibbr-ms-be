@@ -17,7 +17,7 @@ const buildRedisUrl = (): string => {
   }
 
   const host = process.env.REDIS_HOST || 'localhost';
-  const port = process.env.REDIS_PORT || '28766';
+  const port = process.env.REDIS_PORT || '6379';
   const password = process.env.REDIS_PASSWORD;
 
   console.log('🔗 WebSocket Redis config:', {
@@ -85,6 +85,16 @@ export const createStateRedisClient = async () => {
   client.on('error', (err: Error) => console.error('❌ Redis State Error:', err));
   await client.connect();
   console.log('✅ Redis State client connected');
+  return client;
+};
+
+// Stream client for Valkey Streams (socket-service consumers)
+export const createStreamRedisClient = async () => {
+  const url = getRedisUrl();
+  const client = createClient({ url: url });
+  client.on('error', (err: Error) => console.error('❌ Redis Stream Error:', err));
+  await client.connect();
+  console.log('✅ Redis Stream client connected');
   return client;
 };
 

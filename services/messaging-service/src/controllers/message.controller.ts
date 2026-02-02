@@ -3,7 +3,7 @@ import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from "../services/mention.service.js"; // [mentions]
-import { publishMessageCreatedEvent, publishMessageUpdatedEvent, publishMessageDeletedEvent } from "../services/kafka-publisher.service.js";
+import { publishMessageCreatedEvent, publishMessageUpdatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
 import {
   sendMessageSchema,
   reactToMessageSchema,
@@ -123,9 +123,9 @@ export const sendMessage = async (req: Request, res: Response) => {
       ).catch(err => console.error('[mentions] Failed to process mentions:', err));
     }
 
-    // Publish Kafka event (async, don't await)
+    // Publish Streams event (async, don't await)
     publishMessageCreatedEvent(message).catch(err => 
-      console.error('[Kafka] Failed to publish message.created event:', err)
+      console.error('[Streams] Failed to publish message.created event:', err)
     );
 
     return res.status(201).json({
@@ -271,9 +271,9 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
       ).catch(err => console.error('[mentions] Failed to process mentions:', err));
     }
 
-    // Publish Kafka event (async, don't await)
+    // Publish Streams event (async, don't await)
     publishMessageCreatedEvent(message).catch(err => 
-      console.error('[Kafka] Failed to publish message.created event:', err)
+      console.error('[Streams] Failed to publish message.created event:', err)
     );
 
     return res.status(201).json({
@@ -644,9 +644,9 @@ export const updateMessage = async (req: Request, res: Response) => {
       null // io not available in HTTP controller
     ).catch(err => console.error('[mentions] Failed to update mentions:', err));
 
-    // Publish Kafka event (async, don't await)
+    // Publish Streams event (async, don't await)
     publishMessageUpdatedEvent(updatedMessage).catch(err => 
-      console.error('[Kafka] Failed to publish message.updated event:', err)
+      console.error('[Streams] Failed to publish message.updated event:', err)
     );
 
     return res.status(200).json({
@@ -725,9 +725,9 @@ export const deleteMessage = async (req: Request, res: Response) => {
       },
     });
 
-    // Publish Kafka event (async, don't await)
+    // Publish Streams event (async, don't await)
     publishMessageDeletedEvent(deletedMessage).catch(err => 
-      console.error('[Kafka] Failed to publish message.deleted event:', err)
+      console.error('[Streams] Failed to publish message.deleted event:', err)
     );
 
     return res.status(200).json({

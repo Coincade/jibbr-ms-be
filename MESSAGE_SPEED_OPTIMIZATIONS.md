@@ -69,11 +69,11 @@ Save message → Broadcast immediately → Process attachments/mentions async
 7. Update message with full data if needed
 ```
 
-### Kafka Integration (for HTTP API):
+### Valkey Streams Integration (for HTTP API):
 ```
 1. HTTP POST → messaging-service
-2. Save to DB → Publish to Kafka
-3. socket-service consumes from Kafka
+2. Save to DB → Publish to Valkey Streams
+3. socket-service consumes from Streams
 4. Broadcast via WebSocket
 ```
 
@@ -148,7 +148,7 @@ Watch for these logs:
 1. Check database connection pool size
 2. Verify WebSocket connection is stable
 3. Check for database query bottlenecks
-4. Monitor Kafka latency (for HTTP API messages)
+4. Monitor Streams latency (for HTTP API messages)
 
 ### If messages appear twice:
 - This is normal during optimistic updates

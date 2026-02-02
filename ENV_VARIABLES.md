@@ -98,6 +98,35 @@ ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
 
 ---
 
+### **Socket Service** (`services/socket-service/.env`)
+
+Required variables:
+```env
+PORT=3004
+REDIS_URL=redis://localhost:6379
+# OR use separate Redis config:
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=your-redis-password
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+
+# Valkey Streams (optional overrides)
+STREAMS_GROUP=socket-service-group
+STREAMS_CONSUMER=socket-1
+STREAMS_DEDUPE_TTL_SECONDS=86400
+STREAMS_CLAIM_IDLE_MS=60000
+STREAMS_READ_COUNT=20
+STREAMS_BLOCK_MS=5000
+```
+
+**Usage:**
+- `PORT` - Service port (default: 3004)
+- `REDIS_URL` or `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` - Redis for Socket.IO adapter + Streams
+- `ALLOWED_ORIGINS` - CORS allowed origins (comma-separated)
+- `STREAMS_*` - Tuning for Valkey Streams consumer behavior
+
+---
+
 ## 🔧 Setup Options
 
 ### Option 1: Individual Service `.env` Files (Recommended)

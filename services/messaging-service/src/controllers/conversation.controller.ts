@@ -3,7 +3,7 @@ import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
 import { ZodError } from "zod";
-import { publishMessageCreatedEvent, publishMessageDeletedEvent } from "../services/kafka-publisher.service.js";
+import { publishMessageCreatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
 
 // Get or create conversation between two users (workspace-specific)
 export const getOrCreateConversation = async (req: Request, res: Response) => {
@@ -516,9 +516,9 @@ export const sendDirectMessage = async (req: Request, res: Response) => {
       }
     });
 
-    // Publish Kafka event (async, don't await)
+    // Publish Streams event (async, don't await)
     publishMessageCreatedEvent(message).catch(err => 
-      console.error('[Kafka] Failed to publish message.created event:', err)
+      console.error('[Streams] Failed to publish message.created event:', err)
     );
 
     return res.status(201).json({
@@ -647,9 +647,9 @@ export const sendDirectMessageWithAttachments = async (req: Request, res: Respon
       }
     });
 
-    // Publish Kafka event (async, don't await)
+    // Publish Streams event (async, don't await)
     publishMessageCreatedEvent(message).catch(err => 
-      console.error('[Kafka] Failed to publish message.created event:', err)
+      console.error('[Streams] Failed to publish message.created event:', err)
     );
 
     return res.status(201).json({
@@ -733,9 +733,9 @@ export const deleteDirectMessage = async (req: Request, res: Response) => {
       },
     });
 
-    // Publish Kafka event (async, don't await)
+    // Publish Streams event (async, don't await)
     publishMessageDeletedEvent(deletedMessage).catch(err => 
-      console.error('[Kafka] Failed to publish message.deleted event:', err)
+      console.error('[Streams] Failed to publish message.deleted event:', err)
     );
 
     return res.status(200).json({
