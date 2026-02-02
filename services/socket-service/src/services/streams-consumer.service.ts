@@ -1,4 +1,3 @@
-import type { RedisClientType } from 'redis';
 import { Server as SocketIOServer } from 'socket.io';
 import { createStreamRedisClient } from '../config/redis.js';
 import {
@@ -25,17 +24,18 @@ type StreamEvent = {
 };
 
 let ioInstance: SocketIOServer | null = null;
-let streamClientPromise: Promise<RedisClientType> | null = null;
+type StreamRedisClient = Awaited<ReturnType<typeof createStreamRedisClient>>;
+let streamClientPromise: Promise<StreamRedisClient> | null = null;
 let isRunning = false;
 
-const getStreamClient = async (): Promise<RedisClientType> => {
+const getStreamClient = async (): Promise<StreamRedisClient> => {
   if (!streamClientPromise) {
     streamClientPromise = createStreamRedisClient();
   }
   return streamClientPromise;
 };
 
-const ensureGroup = async (client: RedisClientType, stream: string) => {
+const ensureGroup = async (client: StreamRedisClient, stream: string) => {
   try {
     await client.xGroupCreate(stream, STREAMS_GROUP, '0', { MKSTREAM: true });
     console.log(`[Streams] Created consumer group ${STREAMS_GROUP} for ${stream}`);
@@ -73,7 +73,7 @@ const parseStreamEvent = (entry: StreamMessage): StreamEvent => {
 };
 
 const shouldProcessEvent = async (
-  client: RedisClientType,
+  client: StreamRedisClient,
   eventId: string
 ): Promise<boolean> => {
   const dedupeKey = `dedupe:${eventId}`;
@@ -85,7 +85,7 @@ const shouldProcessEvent = async (
 };
 
 const processStreamMessage = async (
-  client: RedisClientType,
+  client: StreamRedisClient,
   streamName: string,
   entry: StreamMessage
 ) => {
@@ -122,7 +122,7 @@ const processStreamMessage = async (
 };
 
 const claimStaleMessages = async (
-  client: RedisClientType,
+  client: StreamRedisClient,
   streamName: string
 ) => {
   try {

@@ -1,5 +1,4 @@
 import { randomUUID } from 'crypto';
-import type { RedisClientType } from 'redis';
 import { createStreamRedisClient } from '../config/redis.js';
 import { STREAMS } from '../config/streams.js';
 
@@ -11,9 +10,10 @@ type StreamEvent = {
   source: string;
 };
 
-let streamClientPromise: Promise<RedisClientType> | null = null;
+type StreamRedisClient = Awaited<ReturnType<typeof createStreamRedisClient>>;
+let streamClientPromise: Promise<StreamRedisClient> | null = null;
 
-const getStreamClient = async (): Promise<RedisClientType> => {
+const getStreamClient = async (): Promise<StreamRedisClient> => {
   if (!streamClientPromise) {
     streamClientPromise = createStreamRedisClient();
   }
