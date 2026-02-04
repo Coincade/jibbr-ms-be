@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { randomUUID } from "crypto";
 import prisma from "../config/database.js";
 import { formatError } from "../helper.js";
 import { ZodError } from "zod";
@@ -164,7 +165,17 @@ export const getChannel = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Channel not found" });
     }
 
-    // Check if user is a member of the workspace
+    // Check if user is a member of the channel (for bridge channels, external users are channel members but not workspace members)
+    const userChannelMembership = channel.members.find(m => m.userId === user.id);
+    if (userChannelMembership) {
+      // User is channel member - allow access (handles both workspace and bridge channel external members)
+      return res.status(200).json({
+        message: "Channel fetched successfully",
+        data: channel
+      });
+    }
+
+    // For non-bridge channels, require workspace membership
     const member = await prisma.member.findFirst({
       where: {
         userId: user.id,
@@ -175,11 +186,8 @@ export const getChannel = async (req: Request, res: Response) => {
 
     if (!member) {
       return res.status(403).json({ message: "You are not a member of this workspace" });
-    }
-
-    // Check if user is a member of the channel
-    const userChannelMembership = channel.members.find(member => member.userId === user.id);
-    if (!userChannelMembership) {
+    const channelMemberCheck = channel.members.find(m => m.userId === user.id);
+    if (!channelMemberCheck) {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
@@ -589,6 +597,258 @@ export const hardDeleteChannel = async (req: Request, res: Response) => {
     return res.status(200).json({
       message: "Channel and all associated data permanently deleted successfully"
     });
+  } catch (error) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+const createBridgeChannelSchema = z.object({
+  name: z.string().min(1),
+  workspaceId: z.string(),
+  image: z.string().optional()
+});
+
+const inviteToBridgeSchema = z.object({
+  inviteeEmail: z.string().email()
+});
+
+const acceptInviteSchema = z.object({
+  token: z.string().min(1)
+});
+
+export const createBridgeChannel = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const payload = createBridgeChannelSchema.parse(req.body);
+
+    const workspace = await prisma.workspace.findFirst({
+      where: { id: payload.workspaceId, isActive: true, deletedAt: null }
+    });
+    if (!workspace) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
+    const member = await prisma.member.findFirst({
+      where: { userId: user.id, workspaceId: payload.workspaceId, isActive: true }
+    });
+    const isAdmin = workspace.userId === user.id || member?.role === "ADMIN" || member?.role === "MODERATOR";
+    if (!isAdmin) {
+      return res.status(403).json({ message: "Only workspace admins can create bridge channels" });
+    }
+
+    const channel = await prisma.channel.create({
+      data: {
+        name: payload.name,
+        type: "PUBLIC",
+        isBridgeChannel: true,
+        workspaceId: payload.workspaceId,
+        image: payload.image,
+        channelAdminId: user.id,
+        members: {
+          create: { userId: user.id, isExternal: false }
+        }
+      }
+    });
+
+    return res.status(201).json({ message: "Bridge channel created successfully", data: channel });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(422).json({ message: "Invalid data", errors: formatError(error) });
+    }
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const inviteToBridgeChannel = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const channelId = req.params.channelId;
+    const payload = inviteToBridgeSchema.parse(req.body);
+
+    const channel = await prisma.channel.findFirst({
+      where: { id: channelId, deletedAt: null, isBridgeChannel: true }
+    });
+    if (!channel) {
+      return res.status(404).json({ message: "Bridge channel not found" });
+    }
+    if (channel.channelAdminId !== user.id) {
+      return res.status(403).json({ message: "Only the channel creator can invite external users" });
+    }
+
+    const isAlreadyMember = await prisma.channelMember.findFirst({
+      where: {
+        channelId,
+        isActive: true,
+        user: { email: payload.inviteeEmail.toLowerCase() }
+      }
+    });
+    if (isAlreadyMember) {
+      return res.status(400).json({ message: "User is already a member of this channel" });
+    }
+
+    const token = randomUUID();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 3);
+
+    await prisma.channelInvite.create({
+      data: {
+        channelId,
+        inviteeEmail: payload.inviteeEmail.toLowerCase(),
+        inviterId: user.id,
+        token,
+        expiresAt,
+        status: "PENDING"
+      }
+    });
+
+    const clientAppUrl = process.env.CLIENT_APP_URL || "https://jibbr.com";
+    const acceptUrl = `${clientAppUrl}/bridge-invite?token=${token}`;
+
+    const inviter = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { name: true }
+    });
+    const inviterName = inviter?.name || "Someone";
+
+    const authServiceUrl = process.env.AUTH_SERVICE_URL || process.env.AUTH_API_URL;
+    if (authServiceUrl) {
+      try {
+        const base = authServiceUrl.replace(/\/$/, "");
+        const internalUrl = `${base}/api/internal/send-bridge-invite`;
+        const emailRes = await fetch(internalUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: payload.inviteeEmail,
+            channelName: channel.name,
+            inviterName,
+            url: acceptUrl
+          })
+        });
+        if (!emailRes.ok) {
+          console.error("[BridgeInvite] Auth service email failed:", await emailRes.text());
+        }
+      } catch (err) {
+        console.error("[BridgeInvite] Failed to send invite email:", err);
+      }
+    } else {
+      console.log(`[BridgeInvite] AUTH_SERVICE_URL not set. Would send to ${payload.inviteeEmail}: ${acceptUrl}`);
+    }
+
+    return res.status(201).json({
+      message: "Invite sent successfully",
+      data: { expiresAt: expiresAt.toISOString() }
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(422).json({ message: "Invalid data", errors: formatError(error) });
+    }
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const acceptBridgeInvite = async (req: Request, res: Response) => {
+  try {
+    const payload = acceptInviteSchema.parse(req.body);
+
+    const invite = await prisma.channelInvite.findFirst({
+      where: {
+        token: payload.token,
+        status: "PENDING",
+        expiresAt: { gt: new Date() }
+      },
+      include: { channel: true }
+    });
+
+    if (!invite) {
+      return res.status(400).json({
+        message: "Invalid or expired invite. The link may have expired or already been used."
+      });
+    }
+
+    const inviteeUser = await prisma.user.findUnique({
+      where: { email: invite.inviteeEmail }
+    });
+
+    if (!inviteeUser) {
+      return res.status(400).json({
+        message: "Create an account first",
+        signupUrl: `${process.env.CLIENT_APP_URL || "https://jibbr.com"}/signup`
+      });
+    }
+
+    const existing = await prisma.channelMember.findFirst({
+      where: { channelId: invite.channelId, userId: inviteeUser.id, isActive: true }
+    });
+    if (existing) {
+      await prisma.channelInvite.update({
+        where: { id: invite.id },
+        data: { status: "ACCEPTED", acceptedAt: new Date() }
+      });
+      return res.status(200).json({
+        success: true,
+        channelId: invite.channelId,
+        workspaceId: invite.channel.workspaceId,
+        message: "You are already a member"
+      });
+    }
+
+    await prisma.channelMember.create({
+      data: {
+        channelId: invite.channelId,
+        userId: inviteeUser.id,
+        isExternal: true
+      }
+    });
+
+    await prisma.channelInvite.update({
+      where: { id: invite.id },
+      data: { status: "ACCEPTED", acceptedAt: new Date() }
+    });
+
+    return res.status(200).json({
+      success: true,
+      channelId: invite.channelId,
+      workspaceId: invite.channel.workspaceId,
+      message: "Joined bridge channel successfully"
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(422).json({ message: "Invalid data", errors: formatError(error) });
+    }
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const getBridgeChannels = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const channels = await prisma.channel.findMany({
+      where: {
+        isBridgeChannel: true,
+        deletedAt: null,
+        members: {
+          some: { userId: user.id, isActive: true }
+        }
+      },
+      include: {
+        workspace: { select: { id: true, name: true } }
+      }
+    });
+
+    return res.status(200).json({ message: "Bridge channels fetched successfully", data: channels });
   } catch (error) {
     return res.status(500).json({ message: "Internal server error" });
   }

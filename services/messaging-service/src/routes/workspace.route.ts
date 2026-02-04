@@ -1,11 +1,12 @@
 import express, { RequestHandler } from "express";
-import { createWorkspace, getAllWorkspaces, getWorkspace, getAllWorkspacesForUser, getWorkspaceMembers, joinWorkspace, leaveWorkspace, updateWorkspace, softDeleteWorkspace, hardDeleteWorkspace, getPublicChannels, updateMemberRole } from "../controllers/workspace.controller.js";
+import { createWorkspace, getAllWorkspaces, getWorkspace, getAllWorkspacesForUser, getWorkspaceMembers, joinWorkspace, joinWorkspaceByCode, leaveWorkspace, updateWorkspace, softDeleteWorkspace, hardDeleteWorkspace, getPublicChannels, updateMemberRole } from "../controllers/workspace.controller.js";
 import { authMiddleware } from "@jibbr/auth-middleware";
 import roleMiddleware from "../middleware/Role.middleware.js";
 
 const router = express.Router();
 
 router.post("/create", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, createWorkspace as unknown as RequestHandler);
+router.post("/join-by-code", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, joinWorkspaceByCode as unknown as RequestHandler);
 router.post("/join/:id", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, joinWorkspace as unknown as RequestHandler);
 router.post("/leave/:id", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, leaveWorkspace as unknown as RequestHandler);
 

@@ -3,7 +3,8 @@ import { formatError } from "../helper.js";
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import generateCode from "../helpers/generateCode.js";
-import { createWorkspaceSchema, joinWorkspaceSchema } from "../validation/workspace.validations.js";
+import { getEmailDomain } from "../helpers/domainUtils.js";
+import { createWorkspaceSchema, joinWorkspaceSchema, joinWorkspaceByCodeSchema } from "../validation/workspace.validations.js";
 import { ZodError } from "zod";
 
 
@@ -18,6 +19,29 @@ export const createWorkspace = async (req: Request, res: Response) => {
     if (!user) {
       return res.status(422).json({ message: "User not found" });
     }
+
+    // Domain check: only one workspace per domain
+    const userDomain = getEmailDomain(user.email);
+    if (userDomain) {
+      const existingForDomain = await prisma.workspace.findFirst({
+        where: {
+          isActive: true,
+          deletedAt: null,
+          user: {
+            email: {
+              endsWith: `@${userDomain}`,
+              mode: "insensitive",
+            },
+          },
+        },
+      });
+      if (existingForDomain) {
+        return res.status(400).json({
+          message: "A workspace already exists for your organization. Please join using the join code.",
+        });
+      }
+    }
+
     const workspace = await prisma.workspace.create({
       data: {
         name: payload.name,
@@ -143,7 +167,10 @@ export const getAllWorkspacesForUser = async (req: Request, res: Response) => {
     if (!user) {
       return res.status(422).json({ message: "User not found" });
     }
-    const workspaces = await prisma.workspace.findMany({
+
+    const userDomain = getEmailDomain(user.email);
+
+    const ownedOrMemberWorkspaces = await prisma.workspace.findMany({
       where: {
         isActive: true,
         deletedAt: null,
@@ -152,14 +179,91 @@ export const getAllWorkspacesForUser = async (req: Request, res: Response) => {
           {
             members: {
               some: {
-                userId: user.id
-              }
-            }
-          }
-        ]
+                userId: user.id,
+                isActive: true,
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        user: { select: { email: true } },
+        members: { where: { userId: user.id }, select: { userId: true } },
       },
     });
-    return res.status(200).json({ message: "Workspaces fetched successfully", data: workspaces });
+
+    let domainWorkspaceForJoin: (typeof ownedOrMemberWorkspaces)[number] | null = null;
+    if (userDomain) {
+      const wsForDomain = await prisma.workspace.findFirst({
+        where: {
+          isActive: true,
+          deletedAt: null,
+          user: {
+            email: {
+              endsWith: `@${userDomain}`,
+              mode: "insensitive",
+            },
+          },
+        },
+        include: {
+          user: { select: { email: true } },
+          members: { where: { userId: user.id }, select: { userId: true } },
+        },
+      });
+      if (wsForDomain && wsForDomain.members.length === 0) {
+        domainWorkspaceForJoin = wsForDomain;
+      }
+    }
+
+    const canCreate = userDomain
+      ? !(await prisma.workspace.findFirst({
+          where: {
+            isActive: true,
+            deletedAt: null,
+            user: {
+              email: {
+                endsWith: `@${userDomain}`,
+                mode: "insensitive",
+              },
+            },
+          },
+        }))
+      : false;
+
+    const workspacesMap = new Map(
+      ownedOrMemberWorkspaces.map((ws) => [
+        ws.id,
+        {
+          ...ws,
+          canEnter: true,
+          canJoin: false,
+          joinCode: ws.joinCode,
+        },
+      ])
+    );
+
+    if (domainWorkspaceForJoin && !workspacesMap.has(domainWorkspaceForJoin.id)) {
+      const { joinCode: _jc, ...rest } = domainWorkspaceForJoin;
+      workspacesMap.set(domainWorkspaceForJoin.id, {
+        ...rest,
+        canEnter: false,
+        canJoin: true,
+      } as (typeof ownedOrMemberWorkspaces)[number] & { canEnter: boolean; canJoin: boolean });
+    }
+
+    const workspaces = Array.from(workspacesMap.values()).map(
+      ({ members, user: owner, joinCode, canEnter, canJoin, ...ws }) => ({
+        ...ws,
+        canEnter,
+        canJoin,
+        ...(canEnter && joinCode ? { joinCode } : {}),
+      })
+    );
+
+    return res.status(200).json({
+      message: "Workspaces fetched successfully",
+      data: { workspaces, canCreate },
+    });
   } catch (error) {
     if (error instanceof ZodError) {
       const errors = formatError(error);
@@ -274,6 +378,90 @@ export const joinWorkspace = async (req: Request, res: Response) => {
     return res.status(200).json({ message: "Joined workspace successfully", data: member });
   } catch (error) {
     if (error instanceof ZodError) {  
+      const errors = formatError(error);
+      return res.status(422).json({ message: "Invalid data", errors });
+    }
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const joinWorkspaceByCode = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const payload = joinWorkspaceByCodeSchema.parse(req.body);
+    const userDomain = getEmailDomain(user.email);
+    if (!userDomain) {
+      return res.status(400).json({ message: "Invalid email format" });
+    }
+
+    const workspace = await prisma.workspace.findFirst({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        joinCode: payload.joinCode,
+        user: {
+          email: {
+            endsWith: `@${userDomain}`,
+            mode: "insensitive",
+          },
+        },
+      },
+      include: {
+        user: { select: { email: true } },
+      },
+    });
+
+    if (!workspace) {
+      return res.status(404).json({ message: "Workspace not found. Check the join code and ensure you belong to the same organization." });
+    }
+
+    const existingMember = await prisma.member.findFirst({
+      where: {
+        userId: user.id,
+        workspaceId: workspace.id,
+        isActive: true,
+      },
+    });
+
+    if (existingMember) {
+      return res.status(422).json({ message: "You are already a member of this workspace" });
+    }
+
+    await prisma.member.create({
+      data: {
+        userId: user.id,
+        workspaceId: workspace.id,
+        role: "MEMBER",
+      },
+    });
+
+    const defaultChannels = await prisma.channel.findMany({
+      where: {
+        workspaceId: workspace.id,
+        name: { in: ["General", "TownHall"] },
+      },
+    });
+
+    if (defaultChannels.length > 0) {
+      await prisma.channelMember.createMany({
+        data: defaultChannels.map((channel) => ({
+          userId: user.id,
+          channelId: channel.id,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return res.status(200).json({
+      message: "Joined workspace successfully",
+      data: { workspaceId: workspace.id },
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
       const errors = formatError(error);
       return res.status(422).json({ message: "Invalid data", errors });
     }

@@ -35,6 +35,31 @@ model User {
   notificationPreferences  UserNotificationPreference?
   pushTokens               UserPushToken[]
   workspaces               Workspace[]
+  channelInvites           ChannelInvite[]
+}
+
+model ChannelInvite {
+  id           String      @id @default(cuid())
+  channelId    String
+  channel      Channel     @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  inviteeEmail String
+  inviterId    String
+  inviter      User        @relation(fields: [inviterId], references: [id])
+  token        String      @unique
+  status       InviteStatus @default(PENDING)
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@unique([channelId, inviteeEmail])
+  @@index([token])
+  @@index([channelId])
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
 }
 
 model Workspace {
@@ -58,6 +83,7 @@ model Channel {
   id                String             @id @default(cuid())
   name              String
   type              ChannelType        @default(PUBLIC)
+  isBridgeChannel   Boolean            @default(false)
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @default(now()) @updatedAt
   workspaceId       String
@@ -67,6 +93,7 @@ model Channel {
   channelAdmin      User               @relation(fields: [channelAdminId], references: [id])
   workspace         Workspace          @relation(fields: [workspaceId], references: [id])
   members           ChannelMember[]
+  invites           ChannelInvite[]
   forwardedMessages ForwardedMessage[]
   messages          Message[]
 }
@@ -189,6 +216,7 @@ model ChannelMember {
   updatedAt   DateTime  @default(now()) @updatedAt
   channelId   String
   userId      String
+  isExternal  Boolean   @default(false)
   isActive    Boolean   @default(true)
   lastReadAt  DateTime?
   unreadCount Int       @default(0)

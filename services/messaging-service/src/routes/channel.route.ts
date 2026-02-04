@@ -1,5 +1,5 @@
 import express, { RequestHandler } from "express";
-import { createChannel, getWorkspaceChannels, getChannel, joinChannel, addMemberToChannel, updateChannel, softDeleteChannel, hardDeleteChannel } from "../controllers/channel.controller.js";
+import { createChannel, getWorkspaceChannels, getChannel, joinChannel, addMemberToChannel, updateChannel, softDeleteChannel, hardDeleteChannel, createBridgeChannel, inviteToBridgeChannel, acceptBridgeInvite, getBridgeChannels } from "../controllers/channel.controller.js";
 import { authMiddleware } from "@jibbr/auth-middleware";
 
 const router = express.Router();
@@ -7,11 +7,19 @@ const router = express.Router();
 // Create a new channel
 router.post("/create", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, createChannel as unknown as RequestHandler);
 
+// Bridge channels
+router.post("/create-bridge", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, createBridgeChannel as unknown as RequestHandler);
+router.get("/bridge-channels", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, getBridgeChannels as unknown as RequestHandler);
+router.post("/accept-invite", acceptBridgeInvite as unknown as RequestHandler);
+
 // Join a channel
 router.post("/join", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, joinChannel as unknown as RequestHandler);
 
 // Add member to private channel
 router.post("/add-member", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, addMemberToChannel as unknown as RequestHandler);
+
+// Invite to bridge channel (creator only)
+router.post("/:channelId/invite", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, inviteToBridgeChannel as unknown as RequestHandler);
 
 // Get all channels in a workspace
 router.get("/workspace/:workspaceId", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, getWorkspaceChannels as unknown as RequestHandler);

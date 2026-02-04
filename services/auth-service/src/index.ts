@@ -71,6 +71,7 @@ app.get('/health', (_req: Request, res: Response) => {
 // Routes
 import authRoutes from './routes/auth.route.js';
 import verifyRoutes from './routes/verify.route.js';
+import internalRoutes from './routes/internal.route.js';
 import { authLimiter, appLimiter } from './config/rateLimit.js';
 
 // Block API routes if DB isn't reachable (clear 503 instead of generic 500)
@@ -87,6 +88,7 @@ app.use((req: Request, res: Response, next) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/verify', verifyRoutes);
+app.use('/api/internal', internalRoutes);
 
 // Rate limiter
 app.use(appLimiter);
