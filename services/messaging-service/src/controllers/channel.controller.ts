@@ -186,6 +186,7 @@ export const getChannel = async (req: Request, res: Response) => {
 
     if (!member) {
       return res.status(403).json({ message: "You are not a member of this workspace" });
+    }
     const channelMemberCheck = channel.members.find(m => m.userId === user.id);
     if (!channelMemberCheck) {
       return res.status(403).json({ message: "You are not a member of this channel" });
