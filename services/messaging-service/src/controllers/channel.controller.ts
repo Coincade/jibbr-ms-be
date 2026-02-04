@@ -100,11 +100,12 @@ export const getWorkspaceChannels = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 
-    // Get channels where user is a member (excluding soft-deleted channels)
+    // Get channels where user is a member (excluding soft-deleted and bridge channels)
     const channels = await prisma.channel.findMany({
       where: {
         workspaceId: workspaceId,
         deletedAt: null,
+        isBridgeChannel: false,
         members: {
           some: {
             userId: user.id,

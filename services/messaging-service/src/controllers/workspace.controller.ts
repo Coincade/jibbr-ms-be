@@ -783,12 +783,13 @@ export const getPublicChannels = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You don't have access to this workspace" });
     }
 
-    // Get all public channels in the workspace
+    // Get all public channels in the workspace (exclude bridge channels)
     const publicChannels = await prisma.channel.findMany({
       where: {
         workspaceId: workspaceId,
         type: "PUBLIC",
         deletedAt: null,
+        isBridgeChannel: false,
       },
       select: {
         id: true,
