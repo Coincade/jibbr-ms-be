@@ -1,5 +1,5 @@
 import express, { RequestHandler } from "express";
-import { createChannel, getWorkspaceChannels, getChannel, joinChannel, addMemberToChannel, updateChannel, softDeleteChannel, hardDeleteChannel, createBridgeChannel, inviteToBridgeChannel, acceptBridgeInvite, getBridgeChannels } from "../controllers/channel.controller.js";
+import { createChannel, getWorkspaceChannels, getChannel, joinChannel, addMemberToChannel, removeMemberFromChannel, updateChannel, softDeleteChannel, hardDeleteChannel, createBridgeChannel, inviteToBridgeChannel, acceptBridgeInvite, getBridgeChannels, checkInviteEmailRegistered } from "../controllers/channel.controller.js";
 import { authMiddleware } from "@jibbr/auth-middleware";
 
 const router = express.Router();
@@ -17,7 +17,11 @@ router.post("/join", authMiddleware(process.env.JWT_SECRET!) as unknown as Reque
 
 // Add member to private channel
 router.post("/add-member", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, addMemberToChannel as unknown as RequestHandler);
+// Remove member from channel (or leave channel if removing self)
+router.post("/:channelId/remove-member", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, removeMemberFromChannel as unknown as RequestHandler);
 
+// Check if email is registered (for invite flow - must be before /:channelId/invite)
+router.get("/check-invite-email", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, checkInviteEmailRegistered as unknown as RequestHandler);
 // Invite to bridge channel (creator only)
 router.post("/:channelId/invite", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, inviteToBridgeChannel as unknown as RequestHandler);
 

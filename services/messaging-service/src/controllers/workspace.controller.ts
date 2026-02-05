@@ -215,8 +215,10 @@ export const getAllWorkspacesForUser = async (req: Request, res: Response) => {
       }
     }
 
-    const canCreate = userDomain
-      ? !(await prisma.workspace.findFirst({
+    // canCreate: true if no workspace exists for the domain yet (first user), OR if the current user
+    // owns a workspace in the domain (first user who created — they can create more workspaces).
+    const workspaceExistsInDomain = userDomain
+      ? await prisma.workspace.findFirst({
           where: {
             isActive: true,
             deletedAt: null,
@@ -227,7 +229,15 @@ export const getAllWorkspacesForUser = async (req: Request, res: Response) => {
               },
             },
           },
-        }))
+        })
+      : null;
+    const userOwnsWorkspaceInDomain =
+      userDomain &&
+      ownedOrMemberWorkspaces.some(
+        (ws) => ws.userId === user.id && getEmailDomain(ws.user?.email ?? "") === userDomain
+      );
+    const canCreate = userDomain
+      ? !workspaceExistsInDomain || !!userOwnsWorkspaceInDomain
       : false;
 
     const workspacesMap = new Map(

@@ -109,7 +109,17 @@ export const login = async (req: Request, res: Response) => {
         },
       });
     }
-    
+
+    // Block login if email is not verified
+    if (!user.email_verified_at) {
+      return res.status(403).json({
+        message: "Please verify your email",
+        errors: {
+          email: "Please verify your email to sign in.",
+        },
+      });
+    }
+
     //JWT Payload
     const JWTPayload = {
       id: user.id,
@@ -713,6 +723,37 @@ export const deleteUser = async (req: Request, res: Response) => {
 
       // Delete channels
       await prisma.channel.deleteMany({
+        where: { workspaceId: workspace.id }
+      });
+
+      // Delete conversation-related data (Conversation has workspaceId FK)
+      await prisma.reaction.deleteMany({
+        where: {
+          message: {
+            conversation: { workspaceId: workspace.id }
+          }
+        }
+      });
+      await prisma.attachment.deleteMany({
+        where: {
+          message: {
+            conversation: { workspaceId: workspace.id }
+          }
+        }
+      });
+      await prisma.forwardedMessage.deleteMany({
+        where: { conversation: { workspaceId: workspace.id } }
+      });
+      await prisma.message.deleteMany({
+        where: { conversation: { workspaceId: workspace.id } }
+      });
+      await prisma.conversationReadStatus.deleteMany({
+        where: { conversation: { workspaceId: workspace.id } }
+      });
+      await prisma.conversationParticipant.deleteMany({
+        where: { conversation: { workspaceId: workspace.id } }
+      });
+      await prisma.conversation.deleteMany({
         where: { workspaceId: workspace.id }
       });
 

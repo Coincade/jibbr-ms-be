@@ -345,8 +345,8 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "User is not a member of this workspace" });
     }
 
-    // Check if the target user is already a member of the channel
-    const existingChannelMember = await prisma.channelMember.findFirst({
+    // Check if the target user is already an active member of the channel
+    const existingActiveMember = await prisma.channelMember.findFirst({
       where: {
         userId: payload.userId,
         channelId: channel.id,
@@ -354,11 +354,31 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
       }
     });
 
-    if (existingChannelMember) {
+    if (existingActiveMember) {
       return res.status(400).json({ message: "User is already a member of this channel" });
     }
 
-    // Add the user to the channel
+    // Check if they were previously removed (soft-deleted membership)
+    const inactiveMembership = await prisma.channelMember.findFirst({
+      where: {
+        userId: payload.userId,
+        channelId: channel.id,
+        isActive: false
+      }
+    });
+
+    if (inactiveMembership) {
+      await prisma.channelMember.updateMany({
+        where: { userId: payload.userId, channelId: channel.id },
+        data: { isActive: true }
+      });
+      return res.status(200).json({
+        message: "Member added to channel successfully",
+        data: { ...inactiveMembership, isActive: true }
+      });
+    }
+
+    // Add the user to the channel (new membership)
     const newChannelMember = await prisma.channelMember.create({
       data: {
         userId: payload.userId,
@@ -377,7 +397,93 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
     }
     return res.status(500).json({ message: "Internal server error" });
   }
-}; 
+};
+
+const removeMemberFromChannelSchema = z.object({
+  userId: z.string().min(1, "UserId is required")
+});
+
+export const removeMemberFromChannel = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const channelId = req.params.channelId;
+    const payload = removeMemberFromChannelSchema.parse(req.body);
+    const targetUserId = payload.userId;
+
+    const channel = await prisma.channel.findFirst({
+      where: { id: channelId, deletedAt: null },
+      include: { workspace: true }
+    });
+
+    if (!channel) {
+      return res.status(404).json({ message: "Channel not found" });
+    }
+
+    const targetChannelMember = await prisma.channelMember.findFirst({
+      where: { channelId, userId: targetUserId, isActive: true }
+    });
+    if (!targetChannelMember) {
+      return res.status(404).json({ message: "User is not a member of this channel" });
+    }
+
+    const isRemovingSelf = targetUserId === user.id;
+
+    if (isRemovingSelf) {
+      if (channel.channelAdminId === user.id) {
+        return res.status(400).json({
+          message: "You created this channel. Transfer ownership to another member or delete the channel before leaving."
+        });
+      }
+      await prisma.channelMember.updateMany({
+        where: { channelId, userId: targetUserId },
+        data: { isActive: false }
+      });
+      return res.status(200).json({ message: "You have left the channel" });
+    }
+
+    // Removing someone else: need permission
+    if (channel.isBridgeChannel) {
+      if (channel.channelAdminId !== user.id) {
+        return res.status(403).json({ message: "Only the channel creator can remove members from this bridge channel" });
+      }
+    } else {
+      const requestingMember = await prisma.member.findFirst({
+        where: {
+          userId: user.id,
+          workspaceId: channel.workspaceId,
+          isActive: true
+        }
+      });
+      if (!requestingMember) {
+        return res.status(403).json({ message: "You are not a member of this workspace" });
+      }
+      const isWorkspaceAdmin = requestingMember.role === "ADMIN" || requestingMember.role === "MODERATOR";
+      const isChannelCreator = channel.channelAdminId === user.id;
+      if (!isWorkspaceAdmin && !isChannelCreator) {
+        return res.status(403).json({ message: "You don't have permission to remove members from this channel" });
+      }
+      if (targetUserId === channel.channelAdminId) {
+        return res.status(400).json({ message: "Cannot remove the channel creator. Transfer ownership first or delete the channel." });
+      }
+    }
+
+    await prisma.channelMember.updateMany({
+      where: { channelId, userId: targetUserId },
+      data: { isActive: false }
+    });
+
+    return res.status(200).json({ message: "Member removed from channel successfully" });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(422).json({ message: "Invalid data", errors: formatError(error) });
+    }
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
 
 export const updateChannel = async (req: Request, res: Response) => {
   try {
@@ -614,6 +720,34 @@ const inviteToBridgeSchema = z.object({
   inviteeEmail: z.string().email()
 });
 
+/** Check if an email is registered in Jibbr (for frontend to block invite UI). Auth-protected. */
+export const checkInviteEmailRegistered = async (req: Request, res: Response) => {
+  try {
+    const email = typeof req.query?.email === "string" ? req.query.email.trim().toLowerCase() : "";
+    if (!email) {
+      return res.status(400).json({ registered: false, message: "Email is required" });
+    }
+    const authServiceUrl = process.env.AUTH_SERVICE_URL || process.env.AUTH_API_URL;
+    if (!authServiceUrl) {
+      return res.status(200).json({ registered: false });
+    }
+    const base = authServiceUrl.replace(/\/$/, "");
+    const checkUrl = `${base}/api/internal/check-email-registered`;
+    const checkRes = await fetch(checkUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    });
+    if (!checkRes.ok) {
+      return res.status(200).json({ registered: false });
+    }
+    const data = (await checkRes.json()) as { registered?: boolean };
+    return res.status(200).json({ registered: data.registered === true });
+  } catch {
+    return res.status(200).json({ registered: false });
+  }
+};
+
 const acceptInviteSchema = z.object({
   token: z.string().min(1)
 });
@@ -685,11 +819,52 @@ export const inviteToBridgeChannel = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "Only the channel creator can invite external users" });
     }
 
+    const inviteeEmail = payload.inviteeEmail.toLowerCase();
+
+    const authServiceUrl = process.env.AUTH_SERVICE_URL || process.env.AUTH_API_URL;
+    if (authServiceUrl) {
+      try {
+        const base = authServiceUrl.replace(/\/$/, "");
+        const checkUrl = `${base}/api/internal/check-email-registered`;
+        const checkRes = await fetch(checkUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: inviteeEmail })
+        });
+        if (!checkRes.ok) {
+          console.error("[BridgeInvite] Auth service check failed:", checkRes.status, await checkRes.text());
+          return res.status(502).json({
+            message: "Unable to verify the invitee. Please try again later."
+          });
+        }
+        const data = (await checkRes.json()) as { registered?: boolean };
+        if (data.registered !== true) {
+          return res.status(400).json({
+            message: "This email is not registered with Jibbr. They need to create an account before you can invite them."
+          });
+        }
+      } catch (err) {
+        console.error("[BridgeInvite] Failed to check if email is registered:", err);
+        return res.status(502).json({
+          message: "Unable to verify the invitee. Please try again later."
+        });
+      }
+    } else {
+      const inviteeUser = await prisma.user.findUnique({
+        where: { email: inviteeEmail }
+      });
+      if (!inviteeUser) {
+        return res.status(400).json({
+          message: "This email is not registered with Jibbr. They need to create an account before you can invite them."
+        });
+      }
+    }
+
     const isAlreadyMember = await prisma.channelMember.findFirst({
       where: {
         channelId,
         isActive: true,
-        user: { email: payload.inviteeEmail.toLowerCase() }
+        user: { email: inviteeEmail }
       }
     });
     if (isAlreadyMember) {
@@ -703,7 +878,7 @@ export const inviteToBridgeChannel = async (req: Request, res: Response) => {
     await prisma.channelInvite.create({
       data: {
         channelId,
-        inviteeEmail: payload.inviteeEmail.toLowerCase(),
+        inviteeEmail,
         inviterId: user.id,
         token,
         expiresAt,
@@ -720,7 +895,6 @@ export const inviteToBridgeChannel = async (req: Request, res: Response) => {
     });
     const inviterName = inviter?.name || "Someone";
 
-    const authServiceUrl = process.env.AUTH_SERVICE_URL || process.env.AUTH_API_URL;
     if (authServiceUrl) {
       try {
         const base = authServiceUrl.replace(/\/$/, "");
@@ -729,7 +903,7 @@ export const inviteToBridgeChannel = async (req: Request, res: Response) => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            to: payload.inviteeEmail,
+            to: inviteeEmail,
             channelName: channel.name,
             inviterName,
             url: acceptUrl
@@ -742,7 +916,7 @@ export const inviteToBridgeChannel = async (req: Request, res: Response) => {
         console.error("[BridgeInvite] Failed to send invite email:", err);
       }
     } else {
-      console.log(`[BridgeInvite] AUTH_SERVICE_URL not set. Would send to ${payload.inviteeEmail}: ${acceptUrl}`);
+      console.log(`[BridgeInvite] AUTH_SERVICE_URL not set. Would send to ${inviteeEmail}: ${acceptUrl}`);
     }
 
     return res.status(201).json({
