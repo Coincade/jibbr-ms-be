@@ -598,6 +598,11 @@ export const deleteUser = async (req: Request, res: Response) => {
       where: { userId: userIdToDelete }
     });
 
+    // 5b. Delete all channel invites created by this user (inviter)
+    await prisma.channelInvite.deleteMany({
+      where: { inviterId: userIdToDelete }
+    });
+
     // 6. Handle channels where user is admin - transfer admin to workspace creator or delete channel
     const channelsWhereUserIsAdmin = await prisma.channel.findMany({
       where: { channelAdminId: userIdToDelete },
