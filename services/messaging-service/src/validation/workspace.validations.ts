@@ -13,14 +13,8 @@ export const joinWorkspaceSchema = z.object({
   joinCode: joinCodeSixDigits,
 });
 
-/** Accept either new 6-digit code or previous alphanumeric join code for backward compatibility */
-const joinCodeForJoinByCode = z.union([
-  joinCodeSixDigits,
-  z.string({ message: "Join code is required" }).min(1).max(32),
-]);
-
 export const joinWorkspaceByCodeSchema = z.object({
-  joinCode: joinCodeForJoinByCode,
+  joinCode: joinCodeSixDigits,
 });
 
 
