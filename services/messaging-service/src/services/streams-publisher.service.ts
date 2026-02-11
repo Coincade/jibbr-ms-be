@@ -116,3 +116,31 @@ export async function publishMessageDeletedEvent(message: any) {
     // Don't throw - allow the request to succeed even if Streams fails
   }
 }
+
+/**
+ * Publish user status changed event to Valkey Streams (socket-service broadcasts via WebSocket)
+ */
+export async function publishUserStatusChangedEvent(
+  userId: string,
+  status: string,
+  customMessage?: string | null
+) {
+  try {
+    const event: StreamEvent = {
+      eventId: randomUUID(),
+      type: 'user.status_changed',
+      data: {
+        userId,
+        status,
+        customMessage: customMessage ?? '',
+      },
+      timestamp: new Date().toISOString(),
+      source: 'messaging-service',
+    };
+
+    await publishEvent(STREAMS.USER_EVENTS, event);
+    console.log('[Streams] Published user.status_changed event:', userId);
+  } catch (error) {
+    console.error('[Streams] Failed to publish user.status_changed event:', error);
+  }
+}

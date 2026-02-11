@@ -1,7 +1,29 @@
-// [mentions] User search controller
+// [mentions] User search controller + user status
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { z } from "zod";
+import { UserPresenceStatus } from "@prisma/client";
+import { publishUserStatusChangedEvent } from "../services/streams-publisher.service.js";
+
+const STATUS_TO_DB: Record<string, UserPresenceStatus> = {
+  available: "available",
+  away: "away",
+  "in-a-meeting": "in_a_meeting",
+  "do-not-disturb": "do_not_disturb",
+  custom: "custom",
+};
+const STATUS_TO_API: Record<UserPresenceStatus, string> = {
+  available: "available",
+  away: "away",
+  in_a_meeting: "in-a-meeting",
+  do_not_disturb: "do-not-disturb",
+  custom: "custom",
+};
+
+const updateStatusSchema = z.object({
+  status: z.enum(["available", "away", "in-a-meeting", "do-not-disturb", "custom"]),
+  customMessage: z.string().max(100).optional(),
+});
 
 const searchUsersSchema = z.object({
   workspaceId: z.string().optional(),
@@ -98,6 +120,170 @@ export const searchUsers = async (req: Request, res: Response) => {
       });
     }
     console.error("[mentions] User search error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Update current user's presence status
+ * PATCH /api/users/me/status
+ */
+export const updateMyStatus = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const payload = updateStatusSchema.parse(req.body);
+    const dbStatus = STATUS_TO_DB[payload.status];
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        presenceStatus: dbStatus,
+        customStatusMessage: payload.customMessage ?? null,
+      },
+    });
+
+    publishUserStatusChangedEvent(user.id, payload.status, payload.customMessage ?? null).catch((err) =>
+      console.error("[Streams] Failed to publish user.status_changed:", err)
+    );
+
+    return res.status(200).json({
+      message: "Status updated successfully",
+      data: {
+        status: payload.status,
+        customMessage: payload.customMessage ?? "",
+      },
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(422).json({
+        message: "Invalid data",
+        errors: error.errors,
+      });
+    }
+    console.error("[user status] Update error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Get a user's presence status
+ * GET /api/users/:userId/status
+ */
+export const getUserStatus = async (req: Request, res: Response) => {
+  try {
+    const requester = req.user;
+    if (!requester) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const { userId } = req.params;
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { presenceStatus: true, customStatusMessage: true, timezone: true },
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const status = targetUser.presenceStatus ?? "available";
+    const apiStatus = STATUS_TO_API[status];
+
+    return res.status(200).json({
+      message: "User status fetched successfully",
+      data: {
+        userId,
+        status: apiStatus,
+        customMessage: targetUser.customStatusMessage ?? "",
+        timezone: targetUser.timezone ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("[user status] Get error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Get current user's status
+ * GET /api/users/me/status
+ */
+export const getMyStatus = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { presenceStatus: true, customStatusMessage: true, timezone: true },
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const status = targetUser.presenceStatus ?? "available";
+    const apiStatus = STATUS_TO_API[status];
+
+    return res.status(200).json({
+      message: "User status fetched successfully",
+      data: {
+        userId: user.id,
+        status: apiStatus,
+        customMessage: targetUser.customStatusMessage ?? "",
+        timezone: targetUser.timezone ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("[user status] Get my status error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+const updateTimezoneSchema = z.object({
+  timezone: z.union([z.string().max(64), z.null()]).transform((v) => (v === "" ? null : v)),
+});
+
+/**
+ * Update current user's timezone
+ * PATCH /api/users/me/timezone
+ */
+export const updateMyTimezone = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const payload = updateTimezoneSchema.parse(req.body);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { timezone: payload.timezone ?? null },
+    });
+
+    return res.status(200).json({
+      message: "Timezone updated successfully",
+      data: {
+        userId: user.id,
+        timezone: payload.timezone ?? null,
+      },
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(422).json({
+        message: "Invalid data",
+        errors: error.errors,
+      });
+    }
+    console.error("[user timezone] Update error:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 };

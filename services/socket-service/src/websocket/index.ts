@@ -31,6 +31,7 @@ import {
   handleRemoveDirectReaction,
   handleForwardDirectMessage,
 } from './handlers/direct-message.handler.js';
+import prisma from '../config/database.js';
 
 // Global state for managing socket connections
 let io: SocketIOServer;
@@ -513,9 +514,11 @@ const handleDisconnection = (socket: Socket): void => {
     const isStillOnline =
       onlineUsers.has(user.id) && onlineUsers.get(user.id)!.size > 0;
 
-    // If user is completely offline, broadcast offline status
+    // If user is completely offline, broadcast offline status and set status to Away
     if (!isStillOnline) {
       broadcastUserOnlineStatus(user.id, false);
+      // Auto-set presence status to Away when user goes offline
+      setUserStatusToAway(user.id);
     }
   }
 
@@ -585,6 +588,27 @@ const broadcastUserOnlineStatus = (userId: string, isOnline: boolean): void => {
   io.emit('user_status_change', statusData);
 
   console.log(`User ${userId} is now ${isOnline ? 'online' : 'offline'}`);
+};
+
+/** Set user's presence status to Away when they go offline (fire-and-forget) */
+const setUserStatusToAway = (userId: string): void => {
+  // Update presenceStatus to 'away' when user goes offline (run: npx prisma generate in packages/database)
+  prisma.user
+    .update({
+      where: { id: userId },
+      data: { presenceStatus: 'away' } as { presenceStatus: 'away' },
+    })
+    .then(() => {
+      io.emit('user_set_status_change', {
+        userId,
+        status: 'away',
+        customMessage: '',
+      });
+      console.log(`User ${userId} status set to Away (offline)`);
+    })
+    .catch((err) => {
+      console.error(`[socket] Failed to set user ${userId} status to away:`, err);
+    });
 };
 
 // Get online users

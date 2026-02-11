@@ -344,6 +344,15 @@ async function handleUserEvent(event: StreamEvent) {
       console.log('[Streams] Broadcasted user.deleted event');
       break;
 
+    case 'user.status_changed':
+      ioInstance.emit('user_set_status_change', {
+        userId: data.userId,
+        status: data.status,
+        customMessage: data.customMessage ?? '',
+      });
+      console.log('[Streams] Broadcasted user.status_changed to user_set_status_change');
+      break;
+
     default:
       console.warn('[Streams] Unknown user event type:', type);
   }
