@@ -52,6 +52,7 @@ export const register = async (req: Request, res: Response) => {
         email: payload.email,
         password: payload.password,
         email_verify_token: token,
+        email_verify_token_sent_at: new Date(),
       },
     });
 
@@ -244,6 +245,21 @@ export const verifyEmail = async (req: Request, res: Response) => {
       return res.redirect("/verify-error");
     }
 
+    // Check if verification link has expired (2 hours)
+    if (user.email_verify_token_sent_at) {
+      const hoursSinceSent = checkDateHourDiff(user.email_verify_token_sent_at);
+      if (hoursSinceSent > 2) {
+        const isApiRequest = req.headers.accept?.includes('application/json') || req.query.format === 'json';
+        if (isApiRequest) {
+          return res.status(422).json({ 
+            message: "Verification link expired",
+            errors: { token: "This verification link has expired. Please request a new one." }
+          });
+        }
+        return res.redirect(`${process.env.CLIENT_APP_URL}/verify-email?error=expired&email=${encodeURIComponent(String(email))}`);
+      }
+    }
+
     // Token is valid, verify the email
     await prisma.user.update({
       data: {
@@ -303,10 +319,11 @@ export const resendVerificationEmail = async (req: Request, res: Response) => {
     // Send verification link to website, which will handle the API call
     const url = `${process.env.CLIENT_APP_URL}/verify-email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}`;
     
-    // Update user with new token
+    // Update user with new token and sent-at timestamp
     await prisma.user.update({
       data: {
         email_verify_token: token,
+        email_verify_token_sent_at: new Date(),
       },
       where: { email },
     });
@@ -365,6 +382,18 @@ export const forgetPassword = async (req: Request, res: Response) => {
 
     if(!user || user === null) {
       return res.status(422).json({message: "User not found", errors: {email: "User not found with this email"}})
+    }
+
+    // Rate limit: require 2 hours between password reset requests
+    if (user.token_send_at) {
+      const hoursSinceLastRequest = checkDateHourDiff(user.token_send_at);
+      if (hoursSinceLastRequest < 2) {
+        return res.status(429).json({
+          message: "Please wait 2 hours before requesting another password reset link",
+          errors: { email: "A reset link was recently sent. Please wait 2 hours before requesting another." },
+          retryAfterHours: Math.ceil(2 - hoursSinceLastRequest),
+        });
+      }
     }
 
    const salt = await bcrypt.genSalt(10);

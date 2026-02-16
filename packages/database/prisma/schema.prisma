@@ -27,6 +27,7 @@ model User {
   token_send_at            DateTime?
   email_verified_at         DateTime?
   email_verify_token        String?
+  email_verify_token_sent_at DateTime?
   presenceStatus           UserPresenceStatus?         @default(available)
   customStatusMessage      String?                    @db.VarChar(100)
   timezone                 String?                    @db.VarChar(64)
