@@ -513,17 +513,31 @@ export const getMessage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Message not found" });
     }
 
-    // Check if user is member of the channel
-    const channelMember = await prisma.channelMember.findFirst({
-      where: {
-        channelId: message.channelId!,
-        userId: user.id,
-        isActive: true,
-      },
-    });
-
-    if (!channelMember) {
-      return res.status(403).json({ message: "You are not a member of this channel" });
+    // Check access: channel message → channel membership; DM (conversation) message → conversation participation
+    if (message.channelId) {
+      const channelMember = await prisma.channelMember.findFirst({
+        where: {
+          channelId: message.channelId,
+          userId: user.id,
+          isActive: true,
+        },
+      });
+      if (!channelMember) {
+        return res.status(403).json({ message: "You are not a member of this channel" });
+      }
+    } else if (message.conversationId) {
+      const participant = await prisma.conversationParticipant.findFirst({
+        where: {
+          conversationId: message.conversationId,
+          userId: user.id,
+          isActive: true,
+        },
+      });
+      if (!participant) {
+        return res.status(403).json({ message: "You are not a participant in this conversation" });
+      }
+    } else {
+      return res.status(403).json({ message: "Message has no channel or conversation" });
     }
 
     return res.status(200).json({
