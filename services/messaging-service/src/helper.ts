@@ -83,6 +83,37 @@ export const isFileAttachmentsEnabledForChannel = async (channelId: string): Pro
 }
 
 /**
+ * Check if a user can send file attachments to a channel.
+ * Admins and moderators can send attachments even when file attachments are disabled for the workspace.
+ * @param channelId - The channel ID
+ * @param userId - The user ID sending the attachment
+ * @returns Promise<boolean> - True if user can send attachments
+ */
+export const canUserSendAttachmentsToChannel = async (channelId: string, userId: string): Promise<boolean> => {
+    try {
+        const channel = await prisma.channel.findUnique({
+            where: { id: channelId, deletedAt: null },
+            select: {
+                workspaceId: true,
+                workspace: { select: { fileAttachmentsEnabled: true } },
+            },
+        });
+        if (!channel) return true;
+
+        if (channel.workspace.fileAttachmentsEnabled) return true;
+
+        const member = await prisma.member.findFirst({
+            where: { workspaceId: channel.workspaceId, userId, isActive: true },
+            select: { role: true },
+        });
+        return member?.role === 'ADMIN' || member?.role === 'MODERATOR';
+    } catch (error) {
+        console.error('Error checking canUserSendAttachmentsToChannel:', error);
+        return true;
+    }
+}
+
+/**
  * Check if file attachments are enabled for a conversation's workspace
  * @param conversationId - The conversation ID to check
  * @returns Promise<boolean> - True if attachments are enabled for the workspace, false otherwise
@@ -106,5 +137,36 @@ export const isFileAttachmentsEnabledForConversation = async (conversationId: st
     } catch (error) {
         console.error('Error checking file attachments setting for conversation:', error);
         return true; // Default to true on error
+    }
+}
+
+/**
+ * Check if a user can send file attachments to a conversation (DM).
+ * Admins and moderators can send attachments even when file attachments are disabled for the workspace.
+ * @param conversationId - The conversation ID
+ * @param userId - The user ID sending the attachment
+ * @returns Promise<boolean> - True if user can send attachments
+ */
+export const canUserSendAttachmentsToConversation = async (conversationId: string, userId: string): Promise<boolean> => {
+    try {
+        const conversation = await prisma.conversation.findUnique({
+            where: { id: conversationId },
+            select: {
+                workspaceId: true,
+                workspace: { select: { fileAttachmentsEnabled: true } },
+            },
+        });
+        if (!conversation) return true;
+
+        if (conversation.workspace.fileAttachmentsEnabled) return true;
+
+        const member = await prisma.member.findFirst({
+            where: { workspaceId: conversation.workspaceId, userId, isActive: true },
+            select: { role: true },
+        });
+        return member?.role === 'ADMIN' || member?.role === 'MODERATOR';
+    } catch (error) {
+        console.error('Error checking canUserSendAttachmentsToConversation:', error);
+        return true;
     }
 }

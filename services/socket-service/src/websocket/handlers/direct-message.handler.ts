@@ -18,7 +18,7 @@ import {
 } from '../../validation/message.validations.js';
 import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
-import { isFileAttachmentsEnabledForConversation } from '../../helper.js';
+import { canUserSendAttachmentsToConversation } from '../../helper.js';
 
 /**
  * Handle send direct message event
@@ -51,11 +51,14 @@ export const handleSendDirectMessage = async (
       throw new Error('You are not a participant of this conversation');
     }
 
-    // Check if file attachments are enabled for this conversation (if attachments are provided)
+    // Check if user can send attachments (if attachments are provided)
     if (data.attachments && data.attachments.length > 0) {
-      const attachmentsEnabled =
-        await isFileAttachmentsEnabledForConversation(data.conversationId);
-      if (!attachmentsEnabled) {
+      const canSendAttachments =
+        await canUserSendAttachmentsToConversation(
+          data.conversationId,
+          socket.data.user.id
+        );
+      if (!canSendAttachments) {
         throw new Error('File attachments are disabled for this conversation');
       }
     }

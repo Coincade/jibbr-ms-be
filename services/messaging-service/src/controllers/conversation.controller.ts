@@ -1,4 +1,4 @@
-import { formatError, isFileAttachmentsEnabledForConversation } from "../helper.js";
+import { formatError, isFileAttachmentsEnabledForConversation, canUserSendAttachmentsToConversation } from "../helper.js";
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
@@ -571,9 +571,9 @@ export const sendDirectMessageWithAttachments = async (req: Request, res: Respon
       return res.status(403).json({ message: "You are not a participant of this conversation" });
     }
 
-    // Check if file attachments are enabled for this conversation
-    const attachmentsEnabled = await isFileAttachmentsEnabledForConversation(conversationId);
-    if (!attachmentsEnabled) {
+    // Check if user can send attachments (enabled for workspace, or user is admin/moderator)
+    const canSendAttachments = await canUserSendAttachmentsToConversation(conversationId, user.id);
+    if (!canSendAttachments) {
       return res.status(403).json({ 
         message: "File attachments are disabled for this conversation" 
       });
