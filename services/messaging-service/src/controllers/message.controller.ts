@@ -884,7 +884,24 @@ export const removeReaction = async (req: Request, res: Response) => {
   }
 };
 
-// Forward a message to another channel
+// Build forwarded content: "**Forwarded from <source> by @<name>**\n\n<content>"
+function buildForwardedContent(
+  sourceName: string,
+  originalSenderName: string,
+  originalContent: string
+): string {
+  const cleanContent = (originalContent || "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .trim();
+  return `**Forwarded from ${sourceName} by @${originalSenderName}**\n\n${cleanContent}`;
+}
+
+// Forward a message to another channel (creates new Message in target + ForwardedMessage record)
 export const forwardMessage = async (req: Request, res: Response) => {
   try {
     const user = req.user;
@@ -895,7 +912,7 @@ export const forwardMessage = async (req: Request, res: Response) => {
     const body = req.body;
     const payload = forwardMessageSchema.parse(body);
 
-    // Check if original message exists
+    // Check if original message exists and is from a channel (this API is channel→channel only)
     const originalMessage = await prisma.message.findUnique({
       where: { id: payload.messageId },
       include: {
@@ -914,12 +931,18 @@ export const forwardMessage = async (req: Request, res: Response) => {
     if (!originalMessage) {
       return res.status(404).json({ message: "Original message not found" });
     }
+    if (originalMessage.deletedAt) {
+      return res.status(400).json({ message: "Cannot forward a deleted message" });
+    }
+    if (!originalMessage.channelId || !originalMessage.channel) {
+      return res.status(400).json({ message: "Can only forward channel messages via this API" });
+    }
 
     // Check if user is member of both channels
     const [sourceChannelMember, targetChannelMember] = await Promise.all([
       prisma.channelMember.findFirst({
         where: {
-          channelId: originalMessage.channelId!,
+          channelId: originalMessage.channelId,
           userId: user.id,
           isActive: true,
         },
@@ -937,7 +960,46 @@ export const forwardMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of one or both channels" });
     }
 
-    // Create forwarded message record
+    const forwardedContent = buildForwardedContent(
+      originalMessage.channel.name,
+      originalMessage.user.name ?? "Unknown",
+      originalMessage.content
+    );
+
+    // Create new message in target channel (forwarder is the sender)
+    const newMessage = await prisma.message.create({
+      data: {
+        content: forwardedContent,
+        channelId: payload.channelId,
+        userId: user.id,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+          },
+        },
+        attachments: true,
+      },
+    });
+
+    // Copy attachments to the new message
+    if (originalMessage.attachments.length > 0) {
+      await prisma.attachment.createMany({
+        data: originalMessage.attachments.map((att) => ({
+          filename: att.filename,
+          originalName: att.originalName,
+          mimeType: att.mimeType,
+          size: att.size,
+          url: att.url,
+          messageId: newMessage.id,
+        })),
+      });
+    }
+
+    // Create forwarded message record for tracking
     const forwardedMessage = await prisma.forwardedMessage.create({
       data: {
         originalMessageId: payload.messageId,
@@ -947,35 +1009,30 @@ export const forwardMessage = async (req: Request, res: Response) => {
       include: {
         originalMessage: {
           include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
-              },
-            },
+            user: { select: { id: true, name: true, image: true } },
             attachments: true,
           },
         },
-        forwardedBy: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-          },
-        },
-        channel: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
+        forwardedBy: { select: { id: true, name: true, image: true } },
+        channel: { select: { id: true, name: true } },
+      },
+    });
+
+    // Re-fetch new message with attachments for response
+    const messageWithAttachments = await prisma.message.findUnique({
+      where: { id: newMessage.id },
+      include: {
+        user: { select: { id: true, name: true, image: true } },
+        attachments: true,
       },
     });
 
     return res.status(201).json({
       message: "Message forwarded successfully",
-      data: forwardedMessage,
+      data: {
+        message: messageWithAttachments,
+        forwardedMessage,
+      },
     });
   } catch (error) {
     if (error instanceof ZodError) {

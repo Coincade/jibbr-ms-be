@@ -23,6 +23,7 @@ export interface SendMessageMessage extends ClientMessage {
   channelId?: string; // Optional for channel messages
   conversationId?: string; // Optional for direct messages
   replyToId?: string;
+  forwardedFromMessageId?: string; // When forwarding, original message id for ForwardedMessage record
   attachments?: AttachmentData[]; // File references from upload API
 }
 
@@ -31,6 +32,7 @@ export interface SendDirectMessageMessage extends ClientMessage {
   content: string;
   conversationId: string;
   replyToId?: string;
+  forwardedFromMessageId?: string; // When forwarding, original message id for ForwardedMessage record
   attachments?: AttachmentData[];
 }
 

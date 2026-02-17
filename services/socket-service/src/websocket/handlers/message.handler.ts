@@ -1,5 +1,5 @@
 import { Socket, ChannelClientsMap, SendMessageMessage, EditMessageMessage, DeleteMessageMessage, ForwardMessageMessage, MessageData } from '../types.js';
-import { broadcastToChannel, validateChannelMembership, getUserInfo } from '../utils.js';
+import { validateChannelMembership, validateConversationParticipation, getUserInfo } from '../utils.js';
 import { sendMessageSchema, updateMessageSchema } from '../../validation/message.validations.js';
 import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
@@ -25,6 +25,7 @@ export const handleSendMessage = async (
       content: data.content,
       channelId: data.channelId,
       replyToId: data.replyToId,
+      forwardedFromMessageId: data.forwardedFromMessageId,
       attachments: data.attachments,
     });
 
@@ -61,6 +62,27 @@ export const handleSendMessage = async (
       });
       if (!originalMessage || originalMessage.deletedAt) {
         throw new Error('Original message not found or has been deleted');
+      }
+    }
+
+    // If forwarding, validate original message and ensure user has access (ForwardedMessage created after message create)
+    if (payload.forwardedFromMessageId) {
+      const originalMessage = await prisma.message.findUnique({
+        where: { id: payload.forwardedFromMessageId },
+      });
+      if (!originalMessage || originalMessage.deletedAt) {
+        throw new Error('Original message not found or has been deleted');
+      }
+      if (originalMessage.channelId) {
+        const isSourceMember = await validateChannelMembership(socket.data.user.id, originalMessage.channelId);
+        if (!isSourceMember) {
+          throw new Error('You do not have access to the original message');
+        }
+      } else if (originalMessage.conversationId) {
+        const isSourceParticipant = await validateConversationParticipation(socket.data.user.id, originalMessage.conversationId);
+        if (!isSourceParticipant) {
+          throw new Error('You do not have access to the original message');
+        }
       }
     }
     
@@ -104,6 +126,17 @@ export const handleSendMessage = async (
         // Don't include attachments/reactions/mentions here - we'll add them after
       },
     });
+
+    // When forwarding, create ForwardedMessage record so getForwardedMessages is accurate
+    if (payload.forwardedFromMessageId) {
+      await prisma.forwardedMessage.create({
+        data: {
+          originalMessageId: payload.forwardedFromMessageId,
+          forwardedByUserId: socket.data.user.id,
+          channelId: payload.channelId,
+        },
+      });
+    }
 
     // OPTIMIZATION: Broadcast immediately with basic data (Slack-like speed)
     // Attachments and mentions will be added asynchronously
@@ -379,8 +412,20 @@ export const handleDeleteMessage = async (
   }
 };
 
+function buildForwardedContent(sourceName: string, originalSenderName: string, originalContent: string): string {
+  const cleanContent = (originalContent || '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .trim();
+  return `**Forwarded from ${sourceName} by @${originalSenderName}**\n\n${cleanContent}`;
+}
+
 /**
- * Handle forward message event
+ * Handle forward message event (channel → channel): creates new Message in target and broadcasts it
  */
 export const handleForwardMessage = async (
   socket: Socket,
@@ -392,45 +437,63 @@ export const handleForwardMessage = async (
       throw new Error('User not authenticated');
     }
 
-    // Validate channel membership for both source and target channels
     const isSourceMember = await validateChannelMembership(socket.data.user.id, data.channelId);
     const isTargetMember = await validateChannelMembership(socket.data.user.id, data.targetChannelId);
-    
     if (!isSourceMember || !isTargetMember) {
       throw new Error('You are not a member of one or both channels');
     }
 
-    // Get original message
     const { default: prisma } = await import('../../config/database.js');
     const originalMessage = await prisma.message.findUnique({
       where: { id: data.messageId },
       include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-          },
-        },
+        channel: { select: { id: true, name: true } },
+        user: { select: { id: true, name: true, image: true } },
         attachments: true,
-        reactions: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-        },
       },
     });
 
     if (!originalMessage) {
       throw new Error('Original message not found');
     }
+    if (originalMessage.deletedAt) {
+      throw new Error('Cannot forward a deleted message');
+    }
+    if (!originalMessage.channelId || !originalMessage.channel) {
+      throw new Error('Original message must be from a channel');
+    }
 
-    // Create forwarded message record
+    const sourceName = originalMessage.channel.name;
+    const forwardedContent = buildForwardedContent(
+      sourceName,
+      originalMessage.user.name ?? 'Unknown',
+      originalMessage.content
+    );
+
+    const newMessage = await prisma.message.create({
+      data: {
+        content: forwardedContent,
+        channelId: data.targetChannelId,
+        userId: socket.data.user.id,
+      },
+      include: {
+        user: { select: { id: true, name: true, image: true } },
+      },
+    });
+
+    if (originalMessage.attachments.length > 0) {
+      await prisma.attachment.createMany({
+        data: originalMessage.attachments.map((att) => ({
+          filename: att.filename,
+          originalName: att.originalName,
+          mimeType: att.mimeType,
+          size: att.size,
+          url: att.url,
+          messageId: newMessage.id,
+        })),
+      });
+    }
+
     await prisma.forwardedMessage.create({
       data: {
         originalMessageId: data.messageId,
@@ -439,48 +502,37 @@ export const handleForwardMessage = async (
       },
     });
 
-    // Broadcast forwarded message event to target channel
-    const messageData: MessageData = {
-      id: originalMessage.id,
-      content: originalMessage.content,
-      channelId: data.targetChannelId,
-      userId: originalMessage.userId,
-      createdAt: originalMessage.createdAt.toISOString(),
-      updatedAt: originalMessage.updatedAt.toISOString(),
-      replyToId: originalMessage.replyToId,
-      user: {
-        id: originalMessage.user.id,
-        name: originalMessage.user.name || undefined,
-        image: originalMessage.user.image || undefined,
-      },
-      attachments: originalMessage.attachments.map((attachment) => ({
-        id: attachment.id,
-        filename: attachment.filename,
-        originalName: attachment.originalName,
-        mimeType: attachment.mimeType,
-        size: attachment.size,
-        url: attachment.url,
-        createdAt: attachment.createdAt.toISOString(),
-      })),
-      reactions: originalMessage.reactions.map((reaction) => ({
-        id: reaction.id,
-        emoji: reaction.emoji,
-        messageId: reaction.messageId,
-        userId: reaction.userId,
-        createdAt: reaction.createdAt.toISOString(),
-        user: {
-          id: reaction.user.id,
-          name: reaction.user.name || undefined,
-        },
-      })),
-    };
-
-    // Broadcast forwarded message event to target channel (including sender)
-    socket.nsp.to(data.targetChannelId).emit('message_forwarded', {
-      originalMessage: messageData,
-      targetChannelId: data.targetChannelId,
+    const savedAttachments = await prisma.attachment.findMany({
+      where: { messageId: newMessage.id },
     });
 
+    const broadcastMessage: MessageData = {
+      id: newMessage.id,
+      content: newMessage.content,
+      channelId: data.targetChannelId,
+      userId: newMessage.userId,
+      createdAt: newMessage.createdAt.toISOString(),
+      updatedAt: newMessage.updatedAt.toISOString(),
+      replyToId: newMessage.replyToId,
+      user: {
+        id: newMessage.user.id,
+        name: newMessage.user.name ?? undefined,
+        image: newMessage.user.image ?? undefined,
+      },
+      attachments: savedAttachments.map((att) => ({
+        id: att.id,
+        filename: att.filename,
+        originalName: att.originalName,
+        mimeType: att.mimeType,
+        size: att.size,
+        url: att.url,
+        createdAt: att.createdAt.toISOString(),
+      })),
+      reactions: [],
+    };
+
+    socket.to(data.targetChannelId).emit('new_message', broadcastMessage);
+    socket.emit('message_sent', { ...broadcastMessage, id: newMessage.id });
   } catch (error) {
     console.error('Error handling forward message:', error);
     socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to forward message' });

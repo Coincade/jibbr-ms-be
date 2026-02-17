@@ -6,6 +6,7 @@ export const sendMessageSchema = z
     content: z.string().max(2000, 'Message too long'),
     channelId: z.string().min(1, 'Channel ID is required'),
     replyToId: z.string().optional(), // Optional reply to another message
+    forwardedFromMessageId: z.string().optional(), // When forwarding, original message id for ForwardedMessage record
     attachments: z
       .array(
         z.object({
@@ -34,6 +35,7 @@ export const sendDirectMessageSchema = z
     content: z.string().max(2000, 'Message too long'),
     conversationId: z.string().min(1, 'Conversation ID is required'),
     replyToId: z.string().optional(), // Optional reply to another message
+    forwardedFromMessageId: z.string().optional(), // When forwarding, original message id for ForwardedMessage record
     attachments: z
       .array(
         z.object({
