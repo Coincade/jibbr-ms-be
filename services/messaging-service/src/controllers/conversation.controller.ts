@@ -724,13 +724,10 @@ export const deleteDirectMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You can only delete your own messages" });
     }
 
-    // Soft delete the message
+    // Soft delete the message (keep original content in DB)
     const deletedMessage = await prisma.message.update({
       where: { id: messageId },
-      data: { 
-        deletedAt: new Date(),
-        content: '[This message was deleted]' // Optional: replace content
-      },
+      data: { deletedAt: new Date() },
     });
 
     // Publish Streams event (async, don't await)

@@ -335,13 +335,10 @@ export const handleDeleteDirectMessage = async (
       throw new Error('Message is already deleted');
     }
 
-    // Soft delete by setting deletedAt timestamp
+    // Soft delete by setting deletedAt timestamp (keep original content in DB)
     await prisma.message.update({
       where: { id: data.messageId },
-      data: {
-        deletedAt: new Date(),
-        content: '[This message was deleted]', // Optional: replace content
-      },
+      data: { deletedAt: new Date() },
     });
 
     // Broadcast to conversation using Socket.IO

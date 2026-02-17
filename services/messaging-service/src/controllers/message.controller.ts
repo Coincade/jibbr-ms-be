@@ -513,6 +513,11 @@ export const getMessage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Message not found" });
     }
 
+    // Don't expose soft-deleted messages (content stays in DB but not via API)
+    if (message.deletedAt) {
+      return res.status(404).json({ message: "Message not found" });
+    }
+
     // Check access: channel message → channel membership; DM (conversation) message → conversation participation
     if (message.channelId) {
       const channelMember = await prisma.channelMember.findFirst({
@@ -730,13 +735,10 @@ export const deleteMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You can only delete your own messages" });
     }
 
-    // Soft delete the message
+    // Soft delete the message (keep original content in DB)
     const deletedMessage = await prisma.message.update({
       where: { id: payload.messageId },
-      data: { 
-        deletedAt: new Date(),
-        content: '[This message was deleted]' // Optional: replace content
-      },
+      data: { deletedAt: new Date() },
     });
 
     // Publish Streams event (async, don't await)
