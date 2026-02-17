@@ -2,8 +2,10 @@ import { formatError, isFileAttachmentsEnabledForConversation, canUserSendAttach
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import { publishMessageCreatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
+import { buildForwardedContent } from "./message.controller.js";
+import { htmlToCleanText } from "../libs/htmlToCleanText.js";
 
 // Get or create conversation between two users (workspace-specific)
 export const getOrCreateConversation = async (req: Request, res: Response) => {
@@ -539,6 +541,152 @@ export const sendDirectMessage = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Error in sendDirectMessage:', error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+const forwardToConversationSchema = z.object({
+  messageId: z.string().min(1, "Message ID is required"),
+});
+
+// Forward a message to a conversation (DM). Creates new Message + ForwardedMessage record.
+export const forwardToDirectMessage = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const { conversationId } = req.params;
+    const payload = forwardToConversationSchema.parse(req.body);
+
+    // Check user is participant of the target conversation
+    const participant = await prisma.conversationParticipant.findFirst({
+      where: {
+        conversationId,
+        userId: user.id,
+        isActive: true,
+      },
+    });
+    if (!participant) {
+      return res.status(403).json({ message: "You are not a participant of this conversation" });
+    }
+
+    // Load original message with source context
+    const originalMessage = await prisma.message.findUnique({
+      where: { id: payload.messageId },
+      include: {
+        channel: { select: { id: true, name: true } },
+        conversation: { select: { id: true } },
+        user: { select: { id: true, name: true, image: true } },
+        attachments: true,
+      },
+    });
+
+    if (!originalMessage) {
+      return res.status(404).json({ message: "Original message not found" });
+    }
+    if (originalMessage.deletedAt) {
+      return res.status(400).json({ message: "Cannot forward a deleted message" });
+    }
+
+    // Ensure user has access to the original message
+    if (originalMessage.channelId) {
+      const member = await prisma.channelMember.findFirst({
+        where: {
+          channelId: originalMessage.channelId,
+          userId: user.id,
+          isActive: true,
+        },
+      });
+      if (!member) {
+        return res.status(403).json({ message: "You do not have access to the original message" });
+      }
+    } else if (originalMessage.conversationId) {
+      const origParticipant = await prisma.conversationParticipant.findFirst({
+        where: {
+          conversationId: originalMessage.conversationId,
+          userId: user.id,
+          isActive: true,
+        },
+      });
+      if (!origParticipant) {
+        return res.status(403).json({ message: "You do not have access to the original message" });
+      }
+    }
+
+    const sourceName = originalMessage.channel?.name ?? "Direct Message";
+    const forwardedContent = buildForwardedContent(
+      sourceName,
+      originalMessage.user.name ?? "Unknown",
+      originalMessage.content
+    );
+    const contentForDb = htmlToCleanText(forwardedContent);
+
+    const newMessage = await prisma.message.create({
+      data: {
+        content: contentForDb,
+        conversationId,
+        userId: user.id,
+      },
+      include: {
+        user: { select: { id: true, name: true, image: true } },
+        attachments: true,
+      },
+    });
+
+    if (originalMessage.attachments.length > 0) {
+      await prisma.attachment.createMany({
+        data: originalMessage.attachments.map((att) => ({
+          filename: att.filename,
+          originalName: att.originalName,
+          mimeType: att.mimeType,
+          size: att.size,
+          url: att.url,
+          messageId: newMessage.id,
+        })),
+      });
+    }
+
+    await prisma.forwardedMessage.create({
+      data: {
+        originalMessageId: payload.messageId,
+        forwardedByUserId: user.id,
+        conversationId,
+      },
+    });
+
+    const messageWithAttachments = await prisma.message.findUnique({
+      where: { id: newMessage.id },
+      include: {
+        user: { select: { id: true, name: true, image: true } },
+        attachments: true,
+      },
+    });
+
+    publishMessageCreatedEvent(messageWithAttachments!).catch((err) =>
+      console.error("[Streams] Failed to publish message.created event:", err)
+    );
+
+    return res.status(201).json({
+      message: "Message forwarded successfully",
+      data: {
+        message: {
+          ...messageWithAttachments,
+          createdAt: messageWithAttachments!.createdAt.toISOString(),
+          updatedAt: messageWithAttachments!.updatedAt.toISOString(),
+          attachments: messageWithAttachments!.attachments.map((a) => ({
+            ...a,
+            createdAt: a.createdAt.toISOString(),
+          })),
+        },
+      },
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(422).json({ message: "Invalid data", errors: formatError(error) });
+    }
+    console.error("Error in forwardToDirectMessage:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 };

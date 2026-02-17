@@ -68,14 +68,16 @@ export interface ForwardMessageMessage extends ClientMessage {
   type: 'forward_message';
   messageId: string;
   targetChannelId: string;
-  channelId: string;
+  /** Source channel id (only when original message is from a channel); omit when forwarding from DM */
+  channelId?: string;
 }
 
 export interface ForwardToDirectMessage extends ClientMessage {
   type: 'forward_to_direct';
   messageId: string;
   targetConversationId: string;
-  channelId: string;
+  /** Optional source context (channel or conversation id); not required for validation */
+  channelId?: string;
 }
 
 export interface AddReactionMessage extends ClientMessage {

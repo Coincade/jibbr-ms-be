@@ -19,6 +19,7 @@ import {
 import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
 import { canUserSendAttachmentsToConversation } from '../../helper.js';
+import { htmlToCleanText } from '../../libs/htmlToCleanText.js';
 
 /**
  * Handle send direct message event
@@ -110,9 +111,9 @@ export const handleSendDirectMessage = async (
       }
     }
 
-    // Prepare message data
+    const contentForDb = htmlToCleanText(payload.content);
     const messageData: any = {
-      content: payload.content,
+      content: contentForDb,
       conversationId: data.conversationId,
       userId: socket.data.user.id,
       replyToId: payload.replyToId,
@@ -152,6 +153,7 @@ export const handleSendDirectMessage = async (
           conversationId: data.conversationId,
         },
       });
+      console.log('[handleSendDirectMessage] ForwardedMessage created:', { originalMessageId: payload.forwardedFromMessageId, conversationId: data.conversationId });
     }
 
     // OPTIMIZATION: Broadcast immediately with basic data (Slack-like speed)
@@ -304,15 +306,15 @@ export const handleEditDirectMessage = async (
       throw new Error('Message does not belong to this conversation');
     }
 
+    const contentForDb = htmlToCleanText(payload.content);
     await prisma.message.update({
       where: { id: data.messageId },
-      data: { content: payload.content },
+      data: { content: contentForDb },
     });
 
-    // Broadcast to conversation using Socket.IO
     socket.to(data.conversationId).emit('direct_message_edited', {
       messageId: data.messageId,
-      content: payload.content,
+      content: contentForDb,
     });
   } catch (error) {
     if (error instanceof ZodError) {
@@ -594,10 +596,11 @@ export const handleForwardDirectMessage = async (
       originalMessage.user.name ?? 'Unknown',
       originalMessage.content
     );
+    const contentForDb = htmlToCleanText(forwardedContent);
 
     const newMessage = await prisma.message.create({
       data: {
-        content: forwardedContent,
+        content: contentForDb,
         conversationId: data.targetConversationId,
         userId: socket.data.user.id,
       },

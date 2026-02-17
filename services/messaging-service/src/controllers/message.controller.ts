@@ -3,6 +3,7 @@ import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from "../services/mention.service.js"; // [mentions]
+import { htmlToCleanText } from "../libs/htmlToCleanText.js";
 import { publishMessageCreatedEvent, publishMessageUpdatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
 import {
   sendMessageSchema,
@@ -58,10 +59,10 @@ export const sendMessage = async (req: Request, res: Response) => {
       (body as any).jsonContent // Optional JSON content from TipTap
     );
 
-    // Create the message
+    const contentForDb = htmlToCleanText(sanitizedContent);
     const message = await prisma.message.create({
       data: {
-        content: sanitizedContent, // Use sanitized content
+        content: contentForDb,
         channelId: payload.channelId,
         userId: user.id,
         replyToId: payload.replyToId,
@@ -207,9 +208,10 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
     }
 
     // Create the message with attachments
+    const contentForDb = htmlToCleanText(sanitizedContent);
     const message = await prisma.message.create({
       data: {
-        content: sanitizedContent, // Use sanitized content
+        content: contentForDb,
         channelId: payload.channelId,
         userId: user.id,
         replyToId: payload.replyToId,
@@ -609,7 +611,7 @@ export const updateMessage = async (req: Request, res: Response) => {
     const updatedMessage = await prisma.message.update({
       where: { id: payload.messageId },
       data: {
-        content: sanitizedContent, // Use sanitized content
+        content: htmlToCleanText(sanitizedContent),
       },
       include: {
         user: {
@@ -884,8 +886,8 @@ export const removeReaction = async (req: Request, res: Response) => {
   }
 };
 
-// Build forwarded content: "**Forwarded from <source> by @<name>**\n\n<content>"
-function buildForwardedContent(
+// Build forwarded content: "**Forwarded from <source> by @<name>**\n\n<content>" (exported for use in conversation.controller)
+export function buildForwardedContent(
   sourceName: string,
   originalSenderName: string,
   originalContent: string
@@ -912,11 +914,12 @@ export const forwardMessage = async (req: Request, res: Response) => {
     const body = req.body;
     const payload = forwardMessageSchema.parse(body);
 
-    // Check if original message exists and is from a channel (this API is channel→channel only)
+    // Load original message (may be from channel or DM)
     const originalMessage = await prisma.message.findUnique({
       where: { id: payload.messageId },
       include: {
-        channel: true,
+        channel: { select: { id: true, name: true } },
+        conversation: { select: { id: true } },
         user: {
           select: {
             id: true,
@@ -934,42 +937,58 @@ export const forwardMessage = async (req: Request, res: Response) => {
     if (originalMessage.deletedAt) {
       return res.status(400).json({ message: "Cannot forward a deleted message" });
     }
-    if (!originalMessage.channelId || !originalMessage.channel) {
-      return res.status(400).json({ message: "Can only forward channel messages via this API" });
-    }
 
-    // Check if user is member of both channels
-    const [sourceChannelMember, targetChannelMember] = await Promise.all([
-      prisma.channelMember.findFirst({
+    // Ensure user has access to the original message (channel member or conversation participant)
+    if (originalMessage.channelId) {
+      const sourceChannelMember = await prisma.channelMember.findFirst({
         where: {
           channelId: originalMessage.channelId,
           userId: user.id,
           isActive: true,
         },
-      }),
-      prisma.channelMember.findFirst({
+      });
+      if (!sourceChannelMember) {
+        return res.status(403).json({ message: "You do not have access to the original message" });
+      }
+    } else if (originalMessage.conversationId) {
+      const participant = await prisma.conversationParticipant.findFirst({
         where: {
-          channelId: payload.channelId,
+          conversationId: originalMessage.conversationId,
           userId: user.id,
           isActive: true,
         },
-      }),
-    ]);
-
-    if (!sourceChannelMember || !targetChannelMember) {
-      return res.status(403).json({ message: "You are not a member of one or both channels" });
+      });
+      if (!participant) {
+        return res.status(403).json({ message: "You do not have access to the original message" });
+      }
+    } else {
+      return res.status(400).json({ message: "Original message has no channel or conversation" });
     }
 
+    // User must be a member of the target channel
+    const targetChannelMember = await prisma.channelMember.findFirst({
+      where: {
+        channelId: payload.channelId,
+        userId: user.id,
+        isActive: true,
+      },
+    });
+    if (!targetChannelMember) {
+      return res.status(403).json({ message: "You are not a member of the target channel" });
+    }
+
+    const sourceName = originalMessage.channel?.name ?? "Direct Message";
     const forwardedContent = buildForwardedContent(
-      originalMessage.channel.name,
+      sourceName,
       originalMessage.user.name ?? "Unknown",
       originalMessage.content
     );
+    const contentForDb = htmlToCleanText(forwardedContent);
 
     // Create new message in target channel (forwarder is the sender)
     const newMessage = await prisma.message.create({
       data: {
-        content: forwardedContent,
+        content: contentForDb,
         channelId: payload.channelId,
         userId: user.id,
       },

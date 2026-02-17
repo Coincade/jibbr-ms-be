@@ -5,6 +5,7 @@ import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
 import { canUserSendAttachmentsToChannel } from '../../helper.js';
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from '../../services/mention.service.js'; // [mentions]
+import { htmlToCleanText } from '../../libs/htmlToCleanText.js';
 
 /**
  * Handle send message event
@@ -94,9 +95,10 @@ export const handleSendMessage = async (
       (data as any).jsonContent // Optional JSON content from TipTap
     );
 
-    // Prepare message data
+    // Store clean text in DB (no HTML tags)
+    const contentForDb = htmlToCleanText(sanitizedContent);
     const messageData: any = {
-      content: sanitizedContent, // Use sanitized content
+      content: contentForDb,
       channelId: payload.channelId,
       userId: socket.data.user.id,
       replyToId: payload.replyToId,
@@ -136,6 +138,7 @@ export const handleSendMessage = async (
           channelId: payload.channelId,
         },
       });
+      console.log('[handleSendMessage] ForwardedMessage created:', { originalMessageId: payload.forwardedFromMessageId, channelId: payload.channelId });
     }
 
     // OPTIMIZATION: Broadcast immediately with basic data (Slack-like speed)
@@ -331,9 +334,10 @@ export const handleEditMessage = async (
       (data as any).jsonContent // Optional JSON content from TipTap
     );
 
+    const contentForDb = htmlToCleanText(sanitizedContent);
     await prisma.message.update({
       where: { id: data.messageId },
-      data: { content: sanitizedContent }, // Use sanitized content
+      data: { content: contentForDb },
     });
 
     // [mentions] Update mentions (remove old, add new)
@@ -348,7 +352,7 @@ export const handleEditMessage = async (
     // Broadcast to channel using Socket.IO
     socket.to(data.channelId!).emit('message_edited', {
       messageId: data.messageId,
-      content: sanitizedContent,
+      content: contentForDb,
     });
 
   } catch (error) {
@@ -425,7 +429,7 @@ function buildForwardedContent(sourceName: string, originalSenderName: string, o
 }
 
 /**
- * Handle forward message event (channel → channel): creates new Message in target and broadcasts it
+ * Handle forward message event (channel or DM → channel): creates new Message in target and broadcasts it
  */
 export const handleForwardMessage = async (
   socket: Socket,
@@ -437,17 +441,12 @@ export const handleForwardMessage = async (
       throw new Error('User not authenticated');
     }
 
-    const isSourceMember = await validateChannelMembership(socket.data.user.id, data.channelId);
-    const isTargetMember = await validateChannelMembership(socket.data.user.id, data.targetChannelId);
-    if (!isSourceMember || !isTargetMember) {
-      throw new Error('You are not a member of one or both channels');
-    }
-
     const { default: prisma } = await import('../../config/database.js');
     const originalMessage = await prisma.message.findUnique({
       where: { id: data.messageId },
       include: {
         channel: { select: { id: true, name: true } },
+        conversation: { select: { id: true } },
         user: { select: { id: true, name: true, image: true } },
         attachments: true,
       },
@@ -459,20 +458,41 @@ export const handleForwardMessage = async (
     if (originalMessage.deletedAt) {
       throw new Error('Cannot forward a deleted message');
     }
-    if (!originalMessage.channelId || !originalMessage.channel) {
-      throw new Error('Original message must be from a channel');
+
+    // Validate user has access to the original message (channel or DM)
+    if (originalMessage.channelId) {
+      const isSourceMember = await validateChannelMembership(socket.data.user.id, originalMessage.channelId);
+      if (!isSourceMember) {
+        throw new Error('You do not have access to the original message');
+      }
+    } else if (originalMessage.conversationId) {
+      const isSourceParticipant = await validateConversationParticipation(
+        socket.data.user.id,
+        originalMessage.conversationId
+      );
+      if (!isSourceParticipant) {
+        throw new Error('You do not have access to the original message');
+      }
+    } else {
+      throw new Error('Original message has no channel or conversation');
     }
 
-    const sourceName = originalMessage.channel.name;
+    const isTargetMember = await validateChannelMembership(socket.data.user.id, data.targetChannelId);
+    if (!isTargetMember) {
+      throw new Error('You are not a member of the target channel');
+    }
+
+    const sourceName = originalMessage.channel?.name ?? 'Direct Message';
     const forwardedContent = buildForwardedContent(
       sourceName,
       originalMessage.user.name ?? 'Unknown',
       originalMessage.content
     );
+    const contentForDb = htmlToCleanText(forwardedContent);
 
     const newMessage = await prisma.message.create({
       data: {
-        content: forwardedContent,
+        content: contentForDb,
         channelId: data.targetChannelId,
         userId: socket.data.user.id,
       },

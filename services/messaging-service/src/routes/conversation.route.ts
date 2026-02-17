@@ -10,6 +10,7 @@ import {
   getConversationMessages,
   sendDirectMessage,
   sendDirectMessageWithAttachments,
+  forwardToDirectMessage,
   deleteDirectMessage,
 } from "../controllers/conversation.controller.js";
 
@@ -26,6 +27,9 @@ router.get("/:conversationId/messages", authMiddleware(process.env.JWT_SECRET!) 
 
 // Send direct message (text only)
 router.post("/:conversationId/messages", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, sendDirectMessage as unknown as RequestHandler);
+
+// Forward a message to this conversation (creates Message + ForwardedMessage)
+router.post("/:conversationId/messages/forward", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, forwardToDirectMessage as unknown as RequestHandler);
 
 // Send direct message with attachments
 // Note: In production, files should be uploaded via upload-service first, then referenced here

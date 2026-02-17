@@ -32,14 +32,14 @@ export function parseMentionsFromJSON(
   function walkNode(node: ProseMirrorNode): void {
     if (!node || typeof node !== 'object') return;
 
-    // Check if this is a mention node
+    // Check if this is a mention node (frontend uses label, backend historically used username)
     if (node.type === 'mention' && node.attrs) {
       const attrs = node.attrs;
-      if (attrs.type === 'user' && attrs.id && attrs.username) {
-        // Dedupe by userId
+      const name = attrs.username ?? attrs.label;
+      if (attrs.type === 'user' && attrs.id && name) {
         mentions.set(attrs.id, {
           userId: attrs.id,
-          username: attrs.username,
+          username: String(name),
         });
       }
     }
@@ -74,16 +74,22 @@ export function parseMentionsFromHTML(
   const mentions: Map<string, { userId: string; username: string }> =
     new Map();
 
-  // Regex to match mention spans: <span class="mention" data-id="..." data-username="...">@username</span>
-  const mentionRegex =
-    /<span[^>]*class=["']mention["'][^>]*data-id=["']([^"']+)["'][^>]*data-username=["']([^"']+)["'][^>]*>/gi;
+  // Frontend emits data-id and data-label (TipTap mention node); support data-username for backward compatibility.
+  // Match both attribute orders (data-id then data-label, or data-label then data-id).
+  const patterns = [
+    /<span[^>]*class=["']mention["'][^>]*data-id=["']([^"']+)["'][^>]*data-label=["']([^"']+)["'][^>]*>/gi,
+    /<span[^>]*class=["']mention["'][^>]*data-label=["']([^"']+)["'][^>]*data-id=["']([^"']+)["'][^>]*>/gi,
+    /<span[^>]*data-id=["']([^"']+)["'][^>]*data-username=["']([^"']+)["'][^>]*>/gi,
+  ];
 
   let match;
-  while ((match = mentionRegex.exec(html)) !== null) {
-    const userId = match[1];
-    const username = match[2];
-    if (userId && username) {
-      mentions.set(userId, { userId, username });
+  for (const re of patterns) {
+    re.lastIndex = 0;
+    while ((match = re.exec(html)) !== null) {
+      const isLabelFirst = re === patterns[1];
+      const userId = isLabelFirst ? match[2] : match[1];
+      const username = isLabelFirst ? match[1] : match[2];
+      if (userId && username) mentions.set(userId, { userId, username });
     }
   }
 
