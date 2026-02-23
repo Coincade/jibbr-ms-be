@@ -1,0 +1,29 @@
+# Load test: each virtual user hits all four microservices (mixed load)
+# Run: npm run load-test:all   or   npx artillery run load-test/artillery-all-services.yml
+
+config:
+  target: "http://localhost"
+  phases:
+    - duration: 20
+      arrivalRate: 10
+      name: "Warm up"
+    - duration: 120
+      arrivalRate: 30
+      name: "Sustained"
+  variables:
+    auth_port: "3001"
+    upload_port: "3002"
+    messaging_port: "3003"
+    socket_port: "3004"
+
+scenarios:
+  - name: "Hit all four services per user"
+    flow:
+      - get:
+          url: "http://localhost:{{ auth_port }}/health"
+      - get:
+          url: "http://localhost:{{ upload_port }}/health"
+      - get:
+          url: "http://localhost:{{ messaging_port }}/health"
+      - get:
+          url: "http://localhost:{{ socket_port }}/health"

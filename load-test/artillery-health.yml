@@ -1,0 +1,54 @@
+# Load test: health endpoints of all microservices (no auth required)
+# Run: npm run load-test   or   npx artillery run load-test/artillery-health.yml
+#
+# Ensure all services are up on default ports (or set BASE_URL_* env vars):
+#   auth: 3001, upload: 3002, messaging: 3003, socket: 3004
+
+config:
+  target: "http://localhost"
+  phases:
+    - duration: 30
+      arrivalRate: 5
+      name: "Ramp up"
+    - duration: 60
+      arrivalRate: 20
+      name: "Sustained load"
+    - duration: 20
+      arrivalRate: 50
+      name: "Spike"
+  variables:
+    auth_port: "3001"
+    upload_port: "3002"
+    messaging_port: "3003"
+    socket_port: "3004"
+
+scenarios:
+  # Auth service
+  - name: "Auth health"
+    flow:
+      - get:
+          url: "http://localhost:{{ auth_port }}/health"
+          capture:
+            - json: "$.status"
+              as: "auth_status"
+
+  # Upload service
+  - name: "Upload health"
+    flow:
+      - get:
+          url: "http://localhost:{{ upload_port }}/health"
+
+  # Messaging service
+  - name: "Messaging health"
+    flow:
+      - get:
+          url: "http://localhost:{{ messaging_port }}/health"
+          capture:
+            - json: "$.status"
+              as: "msg_status"
+
+  # Socket service (HTTP only; WebSocket load needs a separate script)
+  - name: "Socket health"
+    flow:
+      - get:
+          url: "http://localhost:{{ socket_port }}/health"
