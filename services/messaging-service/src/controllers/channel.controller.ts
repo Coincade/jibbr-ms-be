@@ -167,7 +167,7 @@ export const getChannel = async (req: Request, res: Response) => {
     }
 
     // Check if user is a member of the channel (for bridge channels, external users are channel members but not workspace members)
-    const userChannelMembership = channel.members.find(m => m.userId === user.id);
+    const userChannelMembership = channel.members.find((m: { userId: string }) => m.userId === user.id);
     if (userChannelMembership) {
       // User is channel member - allow access (handles both workspace and bridge channel external members)
       return res.status(200).json({
@@ -188,7 +188,7 @@ export const getChannel = async (req: Request, res: Response) => {
     if (!member) {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
-    const channelMemberCheck = channel.members.find(m => m.userId === user.id);
+    const channelMemberCheck = channel.members.find((m: { userId: string }) => m.userId === user.id);
     if (!channelMemberCheck) {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
@@ -301,11 +301,6 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Channel not found" });
     }
 
-    // Check if the channel is private
-    if (channel.type !== "PRIVATE") {
-      return res.status(400).json({ message: "Can only add members to private channels" });
-    }
-
     // Check if the requesting user is a member of the workspace
     const requestingMember = await prisma.member.findFirst({
       where: {
@@ -317,6 +312,70 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
 
     if (!requestingMember) {
       return res.status(403).json({ message: "You are not a member of this workspace" });
+    }
+
+    // Bridge channel: admin, moderator, or channel creator can add same-workspace (same domain) users without email invite
+    if (channel.isBridgeChannel) {
+      const isChannelCreator = channel.channelAdminId === user.id;
+      const isAdminOrMod = requestingMember.role === "ADMIN" || requestingMember.role === "MODERATOR";
+      if (!isChannelCreator && !isAdminOrMod) {
+        return res.status(403).json({ message: "Only the channel creator, workspace admin, or moderator can add members to this bridge channel" });
+      }
+
+      const requestingChannelMember = await prisma.channelMember.findFirst({
+        where: { userId: user.id, channelId: channel.id, isActive: true }
+      });
+      if (!requestingChannelMember) {
+        return res.status(403).json({ message: "You are not a member of this channel" });
+      }
+
+      const targetMember = await prisma.member.findFirst({
+        where: { userId: payload.userId, workspaceId: channel.workspaceId, isActive: true }
+      });
+      if (!targetMember) {
+        return res.status(400).json({ message: "User is not in this workspace. Only workspace members can be added from the popup; use email invite for external users." });
+      }
+
+      const existingActiveMember = await prisma.channelMember.findFirst({
+        where: { userId: payload.userId, channelId: channel.id, isActive: true }
+      });
+      if (existingActiveMember) {
+        return res.status(400).json({ message: "User is already a member of this channel" });
+      }
+
+      const inactiveMembership = await prisma.channelMember.findFirst({
+        where: { userId: payload.userId, channelId: channel.id, isActive: false }
+      });
+      if (inactiveMembership) {
+        await prisma.channelMember.updateMany({
+          where: { userId: payload.userId, channelId: channel.id },
+          data: { isActive: true, isExternal: false }
+        });
+        const updated = await prisma.channelMember.findFirst({
+          where: { userId: payload.userId, channelId: channel.id }
+        });
+        return res.status(200).json({
+          message: "Member added to channel successfully",
+          data: updated ?? inactiveMembership
+        });
+      }
+
+      const newChannelMember = await prisma.channelMember.create({
+        data: {
+          userId: payload.userId,
+          channelId: channel.id,
+          isExternal: false
+        }
+      });
+      return res.status(200).json({
+        message: "Member added to channel successfully",
+        data: newChannelMember
+      });
+    }
+
+    // Non-bridge: only private channels
+    if (channel.type !== "PRIVATE") {
+      return res.status(400).json({ message: "Can only add members to private channels" });
     }
 
     // Check if the requesting user is a member of the channel
