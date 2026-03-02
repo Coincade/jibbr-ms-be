@@ -155,6 +155,7 @@ model Message {
   userId            String
   conversationId    String?
   deletedAt         DateTime?
+  isThread          Boolean            @default(false) // true when first reply was sent from thread sidebar (so all clients show thread UI)
   attachments       Attachment[]
   forwardedMessages ForwardedMessage[]
   channel           Channel?           @relation(fields: [channelId], references: [id])

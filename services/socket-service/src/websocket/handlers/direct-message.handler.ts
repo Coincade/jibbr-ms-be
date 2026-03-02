@@ -40,6 +40,7 @@ export const handleSendDirectMessage = async (
       content: data.content,
       conversationId: data.conversationId,
       replyToId: data.replyToId,
+      isThreadReply: data.isThreadReply,
       forwardedFromMessageId: data.forwardedFromMessageId,
       attachments: data.attachments,
     });
@@ -144,6 +145,16 @@ export const handleSendDirectMessage = async (
       },
     });
 
+    // When this is a thread reply, mark parent message as thread so all clients show thread UI
+    let parentMessageUpdated: { id: string; isThread: true } | undefined;
+    if (payload.replyToId && payload.isThreadReply) {
+      await prisma.message.update({
+        where: { id: payload.replyToId },
+        data: { isThread: true },
+      });
+      parentMessageUpdated = { id: payload.replyToId, isThread: true };
+    }
+
     // When forwarding, create ForwardedMessage record so getForwardedMessages is accurate
     if (payload.forwardedFromMessageId) {
       await prisma.forwardedMessage.create({
@@ -186,12 +197,16 @@ export const handleSendDirectMessage = async (
 
     // Broadcast immediately (fire and forget) - this is the key to Slack-like speed!
     // Use socket.to() to exclude sender and avoid duplicate messages
-    socket.to(data.conversationId).emit('new_direct_message', broadcastMessage);
+    socket.to(data.conversationId).emit('new_direct_message', {
+      ...broadcastMessage,
+      ...(parentMessageUpdated && { parentMessageUpdated }),
+    });
     
     // Send confirmation to sender with actual message ID (to replace optimistic message)
     socket.emit('message_sent', {
       ...broadcastMessage,
       id: message.id, // Ensure we use the real message ID
+      ...(parentMessageUpdated && { parentMessageUpdated }),
     });
 
     // OPTIMIZATION: Save attachments and process notifications asynchronously (don't block)
