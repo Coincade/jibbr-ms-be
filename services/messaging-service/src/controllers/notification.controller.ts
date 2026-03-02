@@ -54,6 +54,7 @@ export const markAsRead = async (req: Request, res: Response) => {
             userId: user.id,
           },
         },
+        include: { channel: { select: { workspaceId: true } } },
       });
 
       if (!channelMember) {
@@ -73,6 +74,26 @@ export const markAsRead = async (req: Request, res: Response) => {
           unreadCount: 0,
         },
       });
+
+      // Touch recents (Option A: last-opened tracking)
+      await prisma.userRecent.upsert({
+        where: {
+          userId_workspaceId_type_targetId: {
+            userId: user.id,
+            workspaceId: channelMember.channel.workspaceId,
+            type: "CHANNEL",
+            targetId: payload.channelId,
+          },
+        },
+        create: {
+          userId: user.id,
+          workspaceId: channelMember.channel.workspaceId,
+          type: "CHANNEL",
+          targetId: payload.channelId,
+          lastOpenedAt: new Date(),
+        },
+        update: { lastOpenedAt: new Date() },
+      });
     } else if (payload.conversationId) {
       // Mark conversation messages as read
       const participant = await prisma.conversationParticipant.findUnique({
@@ -82,6 +103,7 @@ export const markAsRead = async (req: Request, res: Response) => {
             userId: user.id,
           },
         },
+        include: { conversation: { select: { workspaceId: true } } },
       });
 
       if (!participant) {
@@ -106,6 +128,26 @@ export const markAsRead = async (req: Request, res: Response) => {
           lastReadAt: new Date(),
           unreadCount: 0,
         },
+      });
+
+      // Touch recents (Option A: last-opened tracking)
+      await prisma.userRecent.upsert({
+        where: {
+          userId_workspaceId_type_targetId: {
+            userId: user.id,
+            workspaceId: participant.conversation.workspaceId,
+            type: "CONVERSATION",
+            targetId: payload.conversationId,
+          },
+        },
+        create: {
+          userId: user.id,
+          workspaceId: participant.conversation.workspaceId,
+          type: "CONVERSATION",
+          targetId: payload.conversationId,
+          lastOpenedAt: new Date(),
+        },
+        update: { lastOpenedAt: new Date() },
       });
     }
 

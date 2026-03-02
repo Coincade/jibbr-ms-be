@@ -48,6 +48,7 @@ model User {
   pushTokens               UserPushToken[]
   workspaces               Workspace[]
   channelInvites           ChannelInvite[]
+  userRecents              UserRecent[]
 }
 
 model ChannelInvite {
@@ -89,6 +90,7 @@ model Workspace {
   members                Member[]
   conversations          Conversation[]
   user                   User      @relation(fields: [userId], references: [id])
+  userRecents            UserRecent[]
 }
 
 model Channel {
@@ -335,5 +337,24 @@ enum PushPlatform {
   IOS
   ANDROID
   UNKNOWN
+}
+
+enum RecentType {
+  CHANNEL
+  CONVERSATION
+}
+
+model UserRecent {
+  id           String      @id @default(cuid())
+  userId       String
+  workspaceId  String
+  type         RecentType
+  targetId     String
+  lastOpenedAt DateTime    @default(now())
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace    Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, type, targetId])
+  @@index([userId, workspaceId, lastOpenedAt(sort: Desc)])
 }
 
