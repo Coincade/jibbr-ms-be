@@ -31,6 +31,10 @@ model User {
   presenceStatus           UserPresenceStatus?         @default(available)
   customStatusMessage      String?                    @db.VarChar(100)
   timezone                 String?                    @db.VarChar(64)
+  phone                    String?                    @db.VarChar(32)
+  employeeId               String?                    @db.VarChar(64)
+  birthday                 DateTime?
+  designation              String?                    @db.VarChar(128)
   createdAt                DateTime                    @default(now())
   image                    String?
   updatedAt                DateTime                    @default(now()) @updatedAt

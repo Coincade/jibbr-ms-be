@@ -251,6 +251,131 @@ const updateTimezoneSchema = z.object({
   timezone: z.union([z.string().max(64), z.null()]).transform((v) => (v === "" ? null : v)),
 });
 
+const updateProfileSchema = z.object({
+  name: z.string().min(1).max(256).optional(),
+  image: z.union([z.string(), z.null()]).optional().transform((v) => (v === "" || v === undefined ? null : v)),
+  phone: z.union([z.string().max(32), z.null()]).optional().transform((v) => (v === "" ? null : v)),
+  employeeId: z.union([z.string().max(64), z.null()]).optional().transform((v) => (v === "" ? null : v)),
+  designation: z.union([z.string().max(128), z.null()]).optional().transform((v) => (v === "" ? null : v)),
+  birthday: z.union([z.string(), z.null()]).optional().transform((v) => {
+    if (v === "" || v === null || v === undefined) return null;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }),
+});
+
+/**
+ * Get current user's full profile
+ * GET /api/users/me
+ */
+export const getMe = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const dbUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        timezone: true,
+        phone: true,
+        employeeId: true,
+        birthday: true,
+        designation: true,
+      },
+    });
+
+    if (!dbUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json({
+      message: "Profile fetched successfully",
+      data: {
+        id: dbUser.id,
+        name: dbUser.name ?? undefined,
+        email: dbUser.email,
+        image: dbUser.image ?? undefined,
+        timezone: dbUser.timezone ?? undefined,
+        phone: dbUser.phone ?? undefined,
+        employeeId: dbUser.employeeId ?? undefined,
+        birthday: dbUser.birthday ? dbUser.birthday.toISOString() : undefined,
+        designation: dbUser.designation ?? undefined,
+      },
+    });
+  } catch (error) {
+    console.error("[user profile] getMe error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Update current user's profile (name, image, phone, employeeId, designation, birthday)
+ * PATCH /api/users/me
+ */
+export const updateMe = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const payload = updateProfileSchema.parse(req.body);
+    const data: Record<string, unknown> = {};
+    if (payload.name !== undefined) data.name = payload.name;
+    if (payload.image !== undefined) data.image = payload.image;
+    if (payload.phone !== undefined) data.phone = payload.phone;
+    if (payload.employeeId !== undefined) data.employeeId = payload.employeeId;
+    if (payload.designation !== undefined) data.designation = payload.designation;
+    if (payload.birthday !== undefined) data.birthday = payload.birthday;
+
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: data as Parameters<typeof prisma.user.update>[0]["data"],
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        timezone: true,
+        phone: true,
+        employeeId: true,
+        birthday: true,
+        designation: true,
+      },
+    });
+
+    return res.status(200).json({
+      message: "Profile updated successfully",
+      data: {
+        id: updated.id,
+        name: updated.name ?? undefined,
+        email: updated.email,
+        image: updated.image ?? undefined,
+        timezone: updated.timezone ?? undefined,
+        phone: updated.phone ?? undefined,
+        employeeId: updated.employeeId ?? undefined,
+        birthday: updated.birthday ? updated.birthday.toISOString() : undefined,
+        designation: updated.designation ?? undefined,
+      },
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(422).json({
+        message: "Invalid data",
+        errors: error.errors,
+      });
+    }
+    console.error("[user profile] updateMe error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 /**
  * Update current user's timezone
  * PATCH /api/users/me/timezone

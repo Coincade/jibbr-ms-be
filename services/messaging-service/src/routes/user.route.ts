@@ -1,13 +1,17 @@
 // [mentions] User routes + user status
 import express, { RequestHandler } from "express";
 import { authMiddleware } from "@jibbr/auth-middleware";
-import { searchUsers, updateMyStatus, getMyStatus, getUserStatus, updateMyTimezone } from "../controllers/user.controller.js";
+import { searchUsers, updateMyStatus, getMyStatus, getUserStatus, updateMyTimezone, getMe, updateMe } from "../controllers/user.controller.js";
 
 const router = express.Router();
 const auth = authMiddleware(process.env.JWT_SECRET!);
 
 // Search users in a channel (for mentions)
 router.get("/search", auth as unknown as RequestHandler, searchUsers as unknown as RequestHandler);
+
+// Current user profile (must be before /:userId)
+router.get("/me", auth as unknown as RequestHandler, getMe as unknown as RequestHandler);
+router.patch("/me", auth as unknown as RequestHandler, updateMe as unknown as RequestHandler);
 
 // User presence status (must be before /:userId to match /me first)
 router.patch("/me/status", auth as unknown as RequestHandler, updateMyStatus as unknown as RequestHandler);
