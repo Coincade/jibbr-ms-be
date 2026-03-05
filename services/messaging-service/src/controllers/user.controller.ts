@@ -298,14 +298,14 @@ export const getMe = async (req: Request, res: Response) => {
       message: "Profile fetched successfully",
       data: {
         id: dbUser.id,
-        name: dbUser.name ?? undefined,
+        name: dbUser.name ?? null,
         email: dbUser.email,
-        image: dbUser.image ?? undefined,
-        timezone: dbUser.timezone ?? undefined,
-        phone: dbUser.phone ?? undefined,
-        employeeId: dbUser.employeeId ?? undefined,
-        birthday: dbUser.birthday ? dbUser.birthday.toISOString() : undefined,
-        designation: dbUser.designation ?? undefined,
+        image: dbUser.image ?? null,
+        timezone: dbUser.timezone ?? null,
+        phone: dbUser.phone ?? null,
+        employeeId: dbUser.employeeId ?? null,
+        birthday: dbUser.birthday ? dbUser.birthday.toISOString() : null,
+        designation: dbUser.designation ?? null,
       },
     });
   } catch (error) {
@@ -354,14 +354,14 @@ export const updateMe = async (req: Request, res: Response) => {
       message: "Profile updated successfully",
       data: {
         id: updated.id,
-        name: updated.name ?? undefined,
+        name: updated.name ?? null,
         email: updated.email,
-        image: updated.image ?? undefined,
-        timezone: updated.timezone ?? undefined,
-        phone: updated.phone ?? undefined,
-        employeeId: updated.employeeId ?? undefined,
-        birthday: updated.birthday ? updated.birthday.toISOString() : undefined,
-        designation: updated.designation ?? undefined,
+        image: updated.image ?? null,
+        timezone: updated.timezone ?? null,
+        phone: updated.phone ?? null,
+        employeeId: updated.employeeId ?? null,
+        birthday: updated.birthday ? updated.birthday.toISOString() : null,
+        designation: updated.designation ?? null,
       },
     });
   } catch (error) {
