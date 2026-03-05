@@ -278,16 +278,30 @@ model ConversationReadStatus {
 }
 
 model UserNotificationPreference {
-  id                   String   @id @default(cuid())
-  userId               String   @unique
-  emailNotifications   Boolean  @default(true)
-  pushNotifications    Boolean  @default(true)
-  desktopNotifications Boolean  @default(true)
-  soundEnabled         Boolean  @default(true)
-  mentionNotifications Boolean  @default(true)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @default(now()) @updatedAt
-  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                        String   @id @default(cuid())
+  userId                    String   @unique
+  emailNotifications        Boolean  @default(true)
+  pushNotifications         Boolean  @default(true)
+  desktopNotifications      Boolean  @default(true)
+  soundEnabled              Boolean  @default(true)
+  mentionNotifications      Boolean  @default(true)
+  level                     String   @default("everything") @db.VarChar(32)
+  tangentReplies            Boolean  @default(true)
+  starredMessagesEvenIfPaused Boolean @default(false)
+  newHuddles                Boolean  @default(true)
+  scheduleEnabled           Boolean  @default(false)
+  scheduleMode              String   @default("weekdays") @db.VarChar(32)
+  scheduleDays              Int[]    @default([1, 2, 3, 4, 5])
+  scheduleStart             String   @default("09:00") @db.VarChar(8)
+  scheduleEnd               String   @default("18:00") @db.VarChar(8)
+  muteAll                    Boolean  @default(false)
+  soundMessage              String   @default("boop") @db.VarChar(64)
+  soundStarred              String   @default("boop") @db.VarChar(64)
+  soundHuddle               String   @default("boop") @db.VarChar(64)
+  muteHuddleSounds          Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @default(now()) @updatedAt
+  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model MessageMention {

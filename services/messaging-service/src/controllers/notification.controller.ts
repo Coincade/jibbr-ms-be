@@ -15,12 +15,45 @@ const getUnreadCountsSchema = z.object({
   workspaceId: z.string().optional(),
 });
 
+const notificationLevelSchema = z.enum(["everything", "mentions", "nothing"]);
+const scheduleModeSchema = z.enum(["weekdays", "every_day", "custom"]);
+
+const scheduleSchema = z.object({
+  enabled: z.boolean().optional(),
+  mode: scheduleModeSchema.optional(),
+  days: z.array(z.number().min(0).max(6)).optional(),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+}).optional();
+
+const soundsSchema = z.object({
+  message: z.string().optional(),
+  starredOnly: z.string().optional(),
+  huddle: z.string().optional(),
+}).optional();
+
 const updateNotificationPreferencesSchema = z.object({
   emailNotifications: z.boolean().optional(),
   pushNotifications: z.boolean().optional(),
   desktopNotifications: z.boolean().optional(),
   soundEnabled: z.boolean().optional(),
   mentionNotifications: z.boolean().optional(),
+  level: notificationLevelSchema.optional(),
+  tangentReplies: z.boolean().optional(),
+  starredMessagesEvenIfPaused: z.boolean().optional(),
+  newHuddles: z.boolean().optional(),
+  schedule: scheduleSchema,
+  scheduleEnabled: z.boolean().optional(),
+  scheduleMode: scheduleModeSchema.optional(),
+  scheduleDays: z.array(z.number().min(0).max(6)).optional(),
+  scheduleStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  scheduleEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  muteAll: z.boolean().optional(),
+  sounds: soundsSchema,
+  soundMessage: z.string().optional(),
+  soundStarred: z.string().optional(),
+  soundHuddle: z.string().optional(),
+  muteHuddleSounds: z.boolean().optional(),
 });
 
 const registerPushTokenSchema = z.object({
@@ -376,6 +409,54 @@ export const markAllNotificationsAsRead = async (req: Request, res: Response) =>
   }
 };
 
+function normalizePreferences(raw: {
+  level?: string;
+  tangentReplies?: boolean;
+  starredMessagesEvenIfPaused?: boolean;
+  newHuddles?: boolean;
+  desktopNotifications?: boolean;
+  soundEnabled?: boolean;
+  mentionNotifications?: boolean;
+  scheduleEnabled?: boolean;
+  scheduleMode?: string;
+  scheduleDays?: number[];
+  scheduleStart?: string;
+  scheduleEnd?: string;
+  muteAll?: boolean;
+  soundMessage?: string;
+  soundStarred?: string;
+  soundHuddle?: string;
+  muteHuddleSounds?: boolean;
+  updatedAt?: Date;
+}) {
+  const scheduleDays = raw.scheduleDays ?? [1, 2, 3, 4, 5];
+  return {
+    level: (raw.level ?? "everything") as "everything" | "mentions" | "nothing",
+    tangentReplies: raw.tangentReplies ?? true,
+    starredMessagesEvenIfPaused: raw.starredMessagesEvenIfPaused ?? false,
+    newHuddles: raw.newHuddles ?? true,
+    desktopNotifications: raw.desktopNotifications ?? true,
+    soundEnabled: raw.soundEnabled ?? true,
+    mentionNotifications: raw.mentionNotifications ?? true,
+    schedule: {
+      enabled: raw.scheduleEnabled ?? false,
+      mode: (raw.scheduleMode ?? "weekdays") as "weekdays" | "every_day" | "custom",
+      days: scheduleDays,
+      startTime: raw.scheduleStart ?? "09:00",
+      endTime: raw.scheduleEnd ?? "18:00",
+    },
+    muteAll: raw.muteAll ?? false,
+    sounds: {
+      message: raw.soundMessage ?? "boop",
+      starredOnly: raw.soundStarred ?? "boop",
+      huddle: raw.soundHuddle ?? "boop",
+    },
+    muteHuddleSounds: raw.muteHuddleSounds ?? false,
+    timezone: null as string | null,
+    lastUpdatedAt: raw.updatedAt?.toISOString() ?? new Date().toISOString(),
+  };
+}
+
 // Get user notification preferences
 export const getNotificationPreferences = async (req: Request, res: Response) => {
   try {
@@ -389,7 +470,6 @@ export const getNotificationPreferences = async (req: Request, res: Response) =>
     });
 
     if (!preferences) {
-      // Create default preferences
       preferences = await prisma.userNotificationPreference.create({
         data: {
           userId: user.id,
@@ -397,15 +477,45 @@ export const getNotificationPreferences = async (req: Request, res: Response) =>
       });
     }
 
+    const data = normalizePreferences(preferences);
+
     return res.status(200).json({
       message: "Notification preferences fetched successfully",
-      data: preferences,
+      data,
     });
   } catch (error) {
     console.error("Error in getNotificationPreferences:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
+
+function flattenPayload(payload: z.infer<typeof updateNotificationPreferencesSchema>) {
+  const update: Record<string, unknown> = {};
+  const flat = [
+    "emailNotifications", "pushNotifications", "desktopNotifications",
+    "soundEnabled", "mentionNotifications", "level", "tangentReplies",
+    "starredMessagesEvenIfPaused", "newHuddles", "scheduleEnabled",
+    "scheduleMode", "scheduleDays", "scheduleStart", "scheduleEnd",
+    "muteAll", "soundMessage", "soundStarred", "soundHuddle", "muteHuddleSounds",
+  ] as const;
+  for (const k of flat) {
+    const v = payload[k];
+    if (v !== undefined) update[k] = v;
+  }
+  if (payload.schedule) {
+    if (payload.schedule.enabled !== undefined) update.scheduleEnabled = payload.schedule.enabled;
+    if (payload.schedule.mode !== undefined) update.scheduleMode = payload.schedule.mode;
+    if (payload.schedule.days !== undefined) update.scheduleDays = payload.schedule.days;
+    if (payload.schedule.startTime !== undefined) update.scheduleStart = payload.schedule.startTime;
+    if (payload.schedule.endTime !== undefined) update.scheduleEnd = payload.schedule.endTime;
+  }
+  if (payload.sounds) {
+    if (payload.sounds.message !== undefined) update.soundMessage = payload.sounds.message;
+    if (payload.sounds.starredOnly !== undefined) update.soundStarred = payload.sounds.starredOnly;
+    if (payload.sounds.huddle !== undefined) update.soundHuddle = payload.sounds.huddle;
+  }
+  return update;
+}
 
 // Update user notification preferences
 export const updateNotificationPreferences = async (req: Request, res: Response) => {
@@ -417,19 +527,22 @@ export const updateNotificationPreferences = async (req: Request, res: Response)
 
     const body = req.body;
     const payload = updateNotificationPreferencesSchema.parse(body);
+    const update = flattenPayload(payload);
 
     const preferences = await prisma.userNotificationPreference.upsert({
       where: { userId: user.id },
-      update: payload,
+      update,
       create: {
         userId: user.id,
-        ...payload,
-      },
+        ...update,
+      } as Record<string, unknown>,
     });
+
+    const data = normalizePreferences(preferences);
 
     return res.status(200).json({
       message: "Notification preferences updated successfully",
-      data: preferences,
+      data,
     });
   } catch (error) {
     if (error instanceof ZodError) {
