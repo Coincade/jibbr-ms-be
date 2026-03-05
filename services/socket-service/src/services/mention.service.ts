@@ -1,5 +1,6 @@
 // [mentions] Service for processing mentions in messages
 import prisma from '../config/database.js';
+import { shouldNotify, type NotificationPrefsRaw } from '@jibbr/shared-utils';
 import { parseMentions } from '../libs/tiptapMentionParser.js';
 import { sanitizeMessageHtml } from '../libs/sanitizeHtml.js';
 import { checkSpecialMentionRateLimit } from '../libs/rateLimiter.js';
@@ -154,12 +155,42 @@ export async function createMentionsAndNotifications(
     console.error('[mentions] Failed to create mention records:', error);
   }
 
-  for (const userId of mentionedUserIds) {
-    if (userId === authorId) continue;
+  const usersToNotify = mentionedUserIds.filter((id) => id !== authorId);
+  if (usersToNotify.length === 0) return;
+
+  const usersWithPrefs = await prisma.user.findMany({
+    where: { id: { in: usersToNotify } },
+    select: {
+      id: true,
+      timezone: true,
+      notificationPreferences: {
+        select: {
+          level: true,
+          muteAll: true,
+          tangentReplies: true,
+          starredMessagesEvenIfPaused: true,
+          newHuddles: true,
+          scheduleEnabled: true,
+          scheduleMode: true,
+          scheduleDays: true,
+          scheduleStart: true,
+          scheduleEnd: true,
+        },
+      },
+    },
+  });
+
+  for (const user of usersWithPrefs) {
+    const prefs: NotificationPrefsRaw | null = user.notificationPreferences
+      ? { ...user.notificationPreferences, timezone: user.timezone ?? undefined }
+      : null;
+
+    const event = { isMention: true, isDirectMessage: false, isChannelMessage: false };
+    if (!shouldNotify(prefs, event)) continue;
 
     try {
       const notification = await NotificationService.createNotification({
-        userId,
+        userId: user.id,
         type: 'MENTION',
         title: `You were mentioned in #${channelName}`,
         message: `You were mentioned in ${channelName}`,
@@ -171,7 +202,7 @@ export async function createMentionsAndNotifications(
       });
 
       if (io) {
-        sendToUser(io, userId, 'mention:new', {
+        sendToUser(io, user.id, 'mention:new', {
           notificationId: notification.id,
           messageId,
           channelId,
@@ -179,10 +210,7 @@ export async function createMentionsAndNotifications(
         });
       }
     } catch (error) {
-      console.error(
-        `[mentions] Failed to notify user ${userId}:`,
-        error
-      );
+      console.error(`[mentions] Failed to notify user ${user.id}:`, error);
     }
   }
 }

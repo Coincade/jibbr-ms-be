@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export { shouldNotify, type NotificationPrefsRaw, type NotificationEventMeta } from './notification-preferences';
+
 // Validation utility
 export function validateRequest<T>(schema: z.ZodSchema<T>, data: unknown): T {
   return schema.parse(data);

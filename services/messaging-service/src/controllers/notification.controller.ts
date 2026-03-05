@@ -535,7 +535,7 @@ export const updateNotificationPreferences = async (req: Request, res: Response)
       create: {
         userId: user.id,
         ...update,
-      } as Record<string, unknown>,
+      } as Parameters<typeof prisma.userNotificationPreference.create>[0]["data"],
     });
 
     const data = normalizePreferences(preferences);

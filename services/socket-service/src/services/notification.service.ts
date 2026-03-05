@@ -1,5 +1,6 @@
 import prisma from '../config/database.js';
 import PushService from './push.service.js';
+import { shouldNotify, type NotificationPrefsRaw } from '@jibbr/shared-utils';
 
 export interface NotificationData {
   id: string;
@@ -134,11 +135,22 @@ export class NotificationService {
             select: {
               id: true,
               name: true,
-              pushTokens: {
-                select: { token: true },
-              },
+              timezone: true,
+              pushTokens: { select: { token: true } },
               notificationPreferences: {
-                select: { pushNotifications: true },
+                select: {
+                  level: true,
+                  muteAll: true,
+                  tangentReplies: true,
+                  starredMessagesEvenIfPaused: true,
+                  newHuddles: true,
+                  pushNotifications: true,
+                  scheduleEnabled: true,
+                  scheduleMode: true,
+                  scheduleDays: true,
+                  scheduleStart: true,
+                  scheduleEnd: true,
+                },
               },
             },
           },
@@ -155,6 +167,16 @@ export class NotificationService {
 
       for (const member of channelMembers) {
         await this.incrementChannelUnreadCount(channelId, member.userId);
+
+        const prefs: NotificationPrefsRaw | null = member.user.notificationPreferences
+          ? {
+              ...member.user.notificationPreferences,
+              timezone: member.user.timezone ?? undefined,
+            }
+          : null;
+
+        const event = { isChannelMessage: true, isMention: false, isDirectMessage: false };
+        if (!shouldNotify(prefs, event)) continue;
 
         await this.createNotification({
           userId: member.userId,
@@ -211,11 +233,22 @@ export class NotificationService {
             select: {
               id: true,
               name: true,
-              pushTokens: {
-                select: { token: true },
-              },
+              timezone: true,
+              pushTokens: { select: { token: true } },
               notificationPreferences: {
-                select: { pushNotifications: true },
+                select: {
+                  level: true,
+                  muteAll: true,
+                  tangentReplies: true,
+                  starredMessagesEvenIfPaused: true,
+                  newHuddles: true,
+                  pushNotifications: true,
+                  scheduleEnabled: true,
+                  scheduleMode: true,
+                  scheduleDays: true,
+                  scheduleStart: true,
+                  scheduleEnd: true,
+                },
               },
             },
           },
@@ -235,6 +268,16 @@ export class NotificationService {
           conversationId,
           participant.userId
         );
+
+        const prefs: NotificationPrefsRaw | null = participant.user.notificationPreferences
+          ? {
+              ...participant.user.notificationPreferences,
+              timezone: participant.user.timezone ?? undefined,
+            }
+          : null;
+
+        const event = { isDirectMessage: true, isMention: false, isChannelMessage: false };
+        if (!shouldNotify(prefs, event)) continue;
 
         await this.createNotification({
           userId: participant.userId,

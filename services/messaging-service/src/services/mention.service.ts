@@ -4,6 +4,7 @@ import { parseMentions } from '../libs/tiptapMentionParser.js';
 import { sanitizeMessageHtml } from '../libs/sanitizeHtml.js';
 import { checkSpecialMentionRateLimit } from '../libs/rateLimiter.js';
 import { NotificationService } from './notification.service.js';
+import { shouldNotify, type NotificationPrefsRaw } from '@jibbr/shared-utils';
 
 interface ProcessMentionsResult {
   sanitizedContent: string;
@@ -161,15 +162,42 @@ export async function createMentionsAndNotifications(
     console.error('[mentions] Failed to create mention records:', error);
   }
 
-  // Create notifications (socket-service is responsible for realtime events)
-  for (const userId of mentionedUserIds) {
-    // Skip self-mentions
-    if (userId === authorId) continue;
+  const usersToNotify = mentionedUserIds.filter(id => id !== authorId);
+  if (usersToNotify.length === 0) return;
+
+  const usersWithPrefs = await prisma.user.findMany({
+    where: { id: { in: usersToNotify } },
+    select: {
+      id: true,
+      timezone: true,
+      notificationPreferences: {
+        select: {
+          level: true,
+          muteAll: true,
+          tangentReplies: true,
+          starredMessagesEvenIfPaused: true,
+          newHuddles: true,
+          scheduleEnabled: true,
+          scheduleMode: true,
+          scheduleDays: true,
+          scheduleStart: true,
+          scheduleEnd: true,
+        },
+      },
+    },
+  });
+
+  for (const user of usersWithPrefs) {
+    const prefs: NotificationPrefsRaw | null = user.notificationPreferences
+      ? { ...user.notificationPreferences, timezone: user.timezone ?? undefined }
+      : null;
+
+    const event = { isMention: true, isDirectMessage: false, isChannelMessage: false };
+    if (!shouldNotify(prefs, event)) continue;
 
     try {
-      // Create notification
-      const notification = await NotificationService.createNotification({
-        userId,
+      await NotificationService.createNotification({
+        userId: user.id,
         type: 'MENTION',
         title: `You were mentioned in #${channelName}`,
         message: `You were mentioned in ${channelName}`,
@@ -179,10 +207,8 @@ export async function createMentionsAndNotifications(
           type: 'mention'
         }
       });
-
-      // Note: websocket events are now emitted from socket-service
     } catch (error) {
-      console.error(`[mentions] Failed to notify user ${userId}:`, error);
+      console.error(`[mentions] Failed to notify user ${user.id}:`, error);
     }
   }
 }

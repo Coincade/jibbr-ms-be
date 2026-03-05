@@ -1,5 +1,6 @@
 import prisma from "../config/database.js";
 import PushService from "./push.service.js";
+import { shouldNotify, type NotificationPrefsRaw } from "@jibbr/shared-utils";
 
 export interface NotificationData {
   id: string;
@@ -121,7 +122,6 @@ export class NotificationService {
     channelName: string
   ): Promise<void> {
     try {
-      // Get all channel members except the sender
       const channelMembers = await prisma.channelMember.findMany({
         where: {
           channelId,
@@ -133,18 +133,28 @@ export class NotificationService {
             select: {
               id: true,
               name: true,
-              pushTokens: {
-                select: { token: true },
-              },
+              timezone: true,
+              pushTokens: { select: { token: true } },
               notificationPreferences: {
-                select: { pushNotifications: true },
+                select: {
+                  level: true,
+                  muteAll: true,
+                  tangentReplies: true,
+                  starredMessagesEvenIfPaused: true,
+                  newHuddles: true,
+                  pushNotifications: true,
+                  scheduleEnabled: true,
+                  scheduleMode: true,
+                  scheduleDays: true,
+                  scheduleStart: true,
+                  scheduleEnd: true,
+                },
               },
             },
           },
         },
       });
 
-      // Get sender info
       const sender = await prisma.user.findUnique({
         where: { id: senderId },
         select: { name: true },
@@ -152,12 +162,19 @@ export class NotificationService {
 
       const preview = NotificationService.sanitizeMessagePreview(messageContent);
 
-      // Create notifications for all members
       for (const member of channelMembers) {
-        // Increment unread count
         await this.incrementChannelUnreadCount(channelId, member.userId);
 
-        // Create notification
+        const prefs: NotificationPrefsRaw | null = member.user.notificationPreferences
+          ? {
+              ...member.user.notificationPreferences,
+              timezone: member.user.timezone ?? undefined,
+            }
+          : null;
+
+        const event = { isChannelMessage: true, isMention: false, isDirectMessage: false };
+        if (!shouldNotify(prefs, event)) continue;
+
         await this.createNotification({
           userId: member.userId,
           type: 'NEW_MESSAGE',
@@ -203,7 +220,6 @@ export class NotificationService {
     messageContent: string
   ): Promise<void> {
     try {
-      // Get all conversation participants except the sender
       const participants = await prisma.conversationParticipant.findMany({
         where: {
           conversationId,
@@ -215,18 +231,28 @@ export class NotificationService {
             select: {
               id: true,
               name: true,
-              pushTokens: {
-                select: { token: true },
-              },
+              timezone: true,
+              pushTokens: { select: { token: true } },
               notificationPreferences: {
-                select: { pushNotifications: true },
+                select: {
+                  level: true,
+                  muteAll: true,
+                  tangentReplies: true,
+                  starredMessagesEvenIfPaused: true,
+                  newHuddles: true,
+                  pushNotifications: true,
+                  scheduleEnabled: true,
+                  scheduleMode: true,
+                  scheduleDays: true,
+                  scheduleStart: true,
+                  scheduleEnd: true,
+                },
               },
             },
           },
         },
       });
 
-      // Get sender info
       const sender = await prisma.user.findUnique({
         where: { id: senderId },
         select: { name: true },
@@ -234,12 +260,19 @@ export class NotificationService {
 
       const preview = NotificationService.sanitizeMessagePreview(messageContent);
 
-      // Create notifications for all participants
       for (const participant of participants) {
-        // Increment unread count
         await this.incrementConversationUnreadCount(conversationId, participant.userId);
 
-        // Create notification
+        const prefs: NotificationPrefsRaw | null = participant.user.notificationPreferences
+          ? {
+              ...participant.user.notificationPreferences,
+              timezone: participant.user.timezone ?? undefined,
+            }
+          : null;
+
+        const event = { isDirectMessage: true, isMention: false, isChannelMessage: false };
+        if (!shouldNotify(prefs, event)) continue;
+
         await this.createNotification({
           userId: participant.userId,
           type: 'NEW_MESSAGE',
@@ -287,7 +320,6 @@ export class NotificationService {
     channelName: string
   ): Promise<void> {
     try {
-      // Get sender info
       const sender = await prisma.user.findUnique({
         where: { id: senderId },
         select: { name: true },
@@ -295,7 +327,40 @@ export class NotificationService {
 
       const preview = NotificationService.sanitizeMessagePreview(messageContent);
 
-      // Create mention notification
+      const targetUser = await prisma.user.findUnique({
+        where: { id: mentionedUserId },
+        select: {
+          timezone: true,
+          pushTokens: { select: { token: true } },
+          notificationPreferences: {
+            select: {
+              level: true,
+              muteAll: true,
+              tangentReplies: true,
+              starredMessagesEvenIfPaused: true,
+              newHuddles: true,
+              pushNotifications: true,
+              mentionNotifications: true,
+              scheduleEnabled: true,
+              scheduleMode: true,
+              scheduleDays: true,
+              scheduleStart: true,
+              scheduleEnd: true,
+            },
+          },
+        },
+      });
+
+      const prefs: NotificationPrefsRaw | null = targetUser?.notificationPreferences
+        ? {
+            ...targetUser.notificationPreferences,
+            timezone: targetUser.timezone ?? undefined,
+          }
+        : null;
+
+      const event = { isMention: true, isDirectMessage: false, isChannelMessage: false };
+      if (!shouldNotify(prefs, event)) return;
+
       await this.createNotification({
         userId: mentionedUserId,
         type: 'MENTION',
@@ -306,16 +371,6 @@ export class NotificationService {
           messageId,
           senderId,
           channelName,
-        },
-      });
-
-      const targetUser = await prisma.user.findUnique({
-        where: { id: mentionedUserId },
-        select: {
-          pushTokens: { select: { token: true } },
-          notificationPreferences: {
-            select: { pushNotifications: true, mentionNotifications: true },
-          },
         },
       });
 
@@ -354,18 +409,47 @@ export class NotificationService {
     conversationId?: string
   ): Promise<void> {
     try {
-      // Don't notify if user reacts to their own message
-      if (reactorId === messageOwnerId) {
-        return;
-      }
+      if (reactorId === messageOwnerId) return;
 
-      // Get reactor info
       const reactor = await prisma.user.findUnique({
         where: { id: reactorId },
         select: { name: true },
       });
 
-      const title = channelName 
+      const targetUser = await prisma.user.findUnique({
+        where: { id: messageOwnerId },
+        select: {
+          timezone: true,
+          pushTokens: { select: { token: true } },
+          notificationPreferences: {
+            select: {
+              level: true,
+              muteAll: true,
+              tangentReplies: true,
+              starredMessagesEvenIfPaused: true,
+              newHuddles: true,
+              pushNotifications: true,
+              scheduleEnabled: true,
+              scheduleMode: true,
+              scheduleDays: true,
+              scheduleStart: true,
+              scheduleEnd: true,
+            },
+          },
+        },
+      });
+
+      const prefs: NotificationPrefsRaw | null = targetUser?.notificationPreferences
+        ? {
+            ...targetUser.notificationPreferences,
+            timezone: targetUser.timezone ?? undefined,
+          }
+        : null;
+
+      const event = { isReaction: true, isMention: false, isDirectMessage: false, isChannelMessage: false };
+      if (!shouldNotify(prefs, event)) return;
+
+      const title = channelName
         ? `Reaction in #${channelName}`
         : 'New reaction to your message';
 
@@ -380,14 +464,6 @@ export class NotificationService {
           emoji,
           channelName,
           conversationId,
-        },
-      });
-
-      const targetUser = await prisma.user.findUnique({
-        where: { id: messageOwnerId },
-        select: {
-          pushTokens: { select: { token: true } },
-          notificationPreferences: { select: { pushNotifications: true } },
         },
       });
 
