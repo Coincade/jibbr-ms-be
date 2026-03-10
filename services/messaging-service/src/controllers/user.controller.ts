@@ -326,13 +326,15 @@ export const updateMe = async (req: Request, res: Response) => {
     }
 
     const payload = updateProfileSchema.parse(req.body);
+    const body = req.body as Record<string, unknown>;
+    // Only update fields that were explicitly sent (avoids wiping image when sending birthday, or birthday when sending image)
     const data: Record<string, unknown> = {};
-    if (payload.name !== undefined) data.name = payload.name;
-    if (payload.image !== undefined) data.image = payload.image;
-    if (payload.phone !== undefined) data.phone = payload.phone;
-    if (payload.employeeId !== undefined) data.employeeId = payload.employeeId;
-    if (payload.designation !== undefined) data.designation = payload.designation;
-    if (payload.birthday !== undefined) data.birthday = payload.birthday;
+    if (Object.prototype.hasOwnProperty.call(body, "name")) data.name = payload.name;
+    if (Object.prototype.hasOwnProperty.call(body, "image")) data.image = payload.image;
+    if (Object.prototype.hasOwnProperty.call(body, "phone")) data.phone = payload.phone;
+    if (Object.prototype.hasOwnProperty.call(body, "employeeId")) data.employeeId = payload.employeeId;
+    if (Object.prototype.hasOwnProperty.call(body, "designation")) data.designation = payload.designation;
+    if (Object.prototype.hasOwnProperty.call(body, "birthday")) data.birthday = payload.birthday;
 
     const updated = await prisma.user.update({
       where: { id: user.id },
