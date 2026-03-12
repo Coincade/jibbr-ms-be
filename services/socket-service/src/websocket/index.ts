@@ -31,6 +31,7 @@ import {
   handleRemoveDirectReaction,
   handleForwardDirectMessage,
 } from './handlers/direct-message.handler.js';
+import { handleMarkAsRead } from './handlers/mark-as-read.handler.js';
 import prisma from '../config/database.js';
 
 // Global state for managing socket connections
@@ -317,6 +318,11 @@ const handleConnection = (socket: Socket): void => {
   // Ping/Pong for connection health
   socket.on('ping', () => {
     socket.emit('pong', { timestamp: Date.now() });
+  });
+
+  // Mark as read (channel or conversation)
+  socket.on('mark_as_read', async (data) => {
+    await handleMarkAsRead(socket, data);
   });
 
   // Handle disconnection

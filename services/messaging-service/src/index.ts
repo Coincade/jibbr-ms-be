@@ -74,6 +74,7 @@ import workspaceRoutes from './routes/workspace.route.js';
 import userRoutes from './routes/user.route.js';
 import notificationRoutes from './routes/notification.route.js';
 import recentsRoutes from './routes/recents.route.js';
+import searchRoutes from './routes/search.route.js';
 import { appLimiter } from './config/rateLimit.js';
 
 // Block API routes if DB isn't reachable (clear 503 instead of generic 500)
@@ -95,6 +96,7 @@ app.use('/api/workspaces', workspaceRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/recents', recentsRoutes);
+app.use('/api/search', searchRoutes);
 
 // Rate limiter
 app.use(appLimiter);
