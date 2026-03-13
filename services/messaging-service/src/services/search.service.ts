@@ -346,7 +346,10 @@ async function searchChannels(
   }>
 ): Promise<{ channels: SearchResults['channels']; total: number }> {
   const term = searchTerm?.replace(/%/g, '') ?? '';
-  let filtered = allChannels;
+  // Only show: (1) channels user is in, or (2) public channels user can join
+  let filtered = allChannels.filter(
+    (c) => joinedChannelIds.has(c.id) || c.type === 'PUBLIC'
+  );
   if (term) {
     filtered = filtered.filter((c) => c.name.toLowerCase().includes(term.toLowerCase()));
   }
