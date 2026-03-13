@@ -240,7 +240,7 @@ export const joinChannel = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 
-    // Check if user is already a member of the channel
+    // Check if user is already an active member of the channel
     const existingChannelMember = await prisma.channelMember.findFirst({
       where: {
         userId: user.id,
@@ -253,13 +253,29 @@ export const joinChannel = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "You are already a member of this channel" });
     }
 
-    // Create channel membership
-    const channelMember = await prisma.channelMember.create({
-      data: {
+    // Check if user was previously removed (soft-deleted membership) - reactivate instead of create
+    const previouslyRemoved = await prisma.channelMember.findFirst({
+      where: {
         userId: user.id,
-        channelId: channel.id
+        channelId: channel.id,
+        isActive: false
       }
     });
+
+    let channelMember;
+    if (previouslyRemoved) {
+      channelMember = await prisma.channelMember.update({
+        where: { id: previouslyRemoved.id },
+        data: { isActive: true }
+      });
+    } else {
+      channelMember = await prisma.channelMember.create({
+        data: {
+          userId: user.id,
+          channelId: channel.id
+        }
+      });
+    }
 
     return res.status(200).json({
       message: "Joined channel successfully",
