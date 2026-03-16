@@ -3,39 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        .container {
-            padding: 20px;
-            font-family: Arial, sans-serif;
-        }
-        a {
-            display: inline-block;
-            padding: 5px 10px;
-            background-color: gray;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-            margin: 15px 0;
-        }
-        a:hover {
-            background-color: #c1d4e8;
-        } 
-    </style>
+    <%- include('../partials/email-styles') %>
 </head>
 <body>
-    <div class="container">
-        <p>Hello <strong><%= name %></strong>,</p>
-        <p>Please click the link below to verify your email</p>
-        <a href="<%= url %>" target="_blank">Verify Email</a>
+    <div class="email-wrapper">
+        <div class="container">
+            <p class="greeting">Hello <strong><%= name %></strong>,</p>
+            <p class="body-text">Please click the button below to verify your email.</p>
+            <a href="<%= url %>" target="_blank" class="btn">Verify Email</a>
 
-        <p style="margin-top: 20px; padding: 12px; background-color: #f8f9fa; border-left: 4px solid #0D9488; font-size: 14px;">
-          <strong>Note:</strong> This verification link will expire in 2 hours. If it expires, you can request a new one from the sign-in page.
-        </p>
+            <p class="note">This link expires in 2 hours. Request a new one from the sign-in page if needed.</p>
 
-        <p>If you are not able to click the link, then please copy and paste the below URL in your browser:</p>
-        <p style="word-break: break-all;"><%= url %></p>
+            <p class="url-label">Can't click the button? Copy and paste this URL:</p>
+            <p class="url-box"><%= url %></p>
 
-        <%- include('../partials/footer') %>
+            <div class="footer">
+                <%- include('../partials/footer') %>
+            </div>
+        </div>
     </div>
 </body>
 </html>

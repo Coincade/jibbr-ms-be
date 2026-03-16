@@ -3,36 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        .container {
-            padding: 20px;
-            font-family: Arial, sans-serif;
-        }
-        a {
-            display: inline-block;
-            padding: 10px 20px;
-            background-color: #4a90d9;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-            margin: 15px 0;
-        }
-        a:hover {
-            background-color: #357abd;
-        }
-    </style>
+    <%- include('../partials/email-styles') %>
 </head>
 <body>
-    <div class="container">
-        <p>Hello <strong><%= inviteeName %></strong>,</p>
-        <p><strong><%= inviterName %></strong> has invited you to join the Bridge Channel <strong><%= channelName %></strong> on Jibbr.</p>
-        <p>Click the link below to accept the invitation. This link expires in 3 days.</p>
-        <a href="<%= url %>" target="_blank">Accept Invitation</a>
+    <div class="email-wrapper">
+        <div class="container">
+            <p class="greeting">Hello <strong><%= inviteeName %></strong>,</p>
+            <p class="body-text"><strong><%= inviterName %></strong> invited you to join the Bridge Channel <strong><%= channelName %></strong> on Jibbr.</p>
+            <p class="body-text">Please click the button below to accept the invitation.</p>
+            <a href="<%= url %>" target="_blank" class="btn">Accept Invitation</a>
 
-        <p>If you cannot click the link, copy and paste this URL into your browser:</p>
-        <p style="word-break: break-all;"><%= url %></p>
+            <p class="note">This link expires in 3 days.</p>
 
-        <%- include('../partials/footer') %>
+            <p class="url-label">Can't click the button? Copy and paste this URL:</p>
+            <p class="url-box"><%= url %></p>
+
+            <div class="footer">
+                <%- include('../partials/footer') %>
+            </div>
+        </div>
     </div>
 </body>
 </html>

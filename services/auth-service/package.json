@@ -20,7 +20,8 @@
     "clean": "rm -rf dist",
     "db:generate": "cd ../../packages/database && npm run db:generate",
     "db:migrate": "cd ../../packages/database && npm run db:migrate",
-    "db:studio": "cd ../../packages/database && npm run db:studio"
+    "db:studio": "cd ../../packages/database && npm run db:studio",
+    "send-test-email": "npx tsx src/scripts/send-test-email.ts"
   },
   "dependencies": {
     "@jibbr/auth-middleware": "*",

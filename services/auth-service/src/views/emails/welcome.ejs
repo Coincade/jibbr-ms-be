@@ -1,14 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<%- include('../partials/head') %>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <%- include('../partials/email-styles') %>
+</head>
 <body>
-    <div class="container">
-    <p>Hello <strong><%= name %></strong>,</p>
-    <p>We are Happy to onboard you!</p>
-    <p>If you have any query, then let us know, we would be happy to help you.</p>
+    <div class="email-wrapper">
+        <div class="container">
+            <p class="greeting">Hello <strong><%= name %></strong>,</p>
+            <p class="body-text">We're happy to have you. If you have any questions, we're here to help.</p>
 
-    <%- include('../partials/footer') %>
-</div>
+            <div class="footer">
+                <%- include('../partials/footer') %>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
