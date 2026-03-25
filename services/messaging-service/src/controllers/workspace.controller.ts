@@ -673,50 +673,42 @@ export const hardDeleteWorkspace = async (req: Request, res: Response) => {
       return res.status(422).json({ message: "Workspace not found" });
     }
 
-    // Hard delete everything related to the workspace
-    // Delete in order to avoid foreign key constraints
-    
-    // 1. Delete all reactions in messages from all channels in this workspace
+    // Messages in this workspace (channels + DMs). Reused for dependent deletes.
+    const messageInWorkspace = {
+      OR: [
+        { channel: { workspaceId: workspaceId } },
+        { conversation: { workspaceId: workspaceId } },
+      ],
+    };
+
+    // Hard delete everything related to the workspace (order respects FK constraints)
+
+    // 1–2. Reactions & attachments on workspace messages
     await prisma.reaction.deleteMany({
-      where: {
-        message: {
-          channel: {
-            workspaceId: workspaceId
-          }
-        }
-      }
+      where: { message: messageInWorkspace },
     });
-
-    // 2. Delete all attachments in messages from all channels in this workspace
     await prisma.attachment.deleteMany({
-      where: {
-        message: {
-          channel: {
-            workspaceId: workspaceId
-          }
-        }
-      }
+      where: { message: messageInWorkspace },
     });
 
-    // 3. Delete all forwarded messages from all channels in this workspace
+    // 3. Forwarded rows in this workspace OR pointing at originals in this workspace
+    //    (originalMessageId is RESTRICT — forwards can live in other channels/DMs)
     await prisma.forwardedMessage.deleteMany({
       where: {
-        channel: {
-          workspaceId: workspaceId
-        }
-      }
+        OR: [
+          { channel: { workspaceId: workspaceId } },
+          { conversation: { workspaceId: workspaceId } },
+          { originalMessage: messageInWorkspace },
+        ],
+      },
     });
 
-    // 4. Delete all messages in all channels in this workspace
+    // 4. All workspace channel + conversation messages
     await prisma.message.deleteMany({
-      where: {
-        channel: {
-          workspaceId: workspaceId
-        }
-      }
+      where: messageInWorkspace,
     });
 
-    // 5. Delete all channel members from all channels in this workspace
+    // 5–6. Channels
     await prisma.channelMember.deleteMany({
       where: {
         channel: {
@@ -724,22 +716,29 @@ export const hardDeleteWorkspace = async (req: Request, res: Response) => {
         }
       }
     });
-
-    // 6. Delete all channels in this workspace
     await prisma.channel.deleteMany({
       where: {
         workspaceId: workspaceId
       }
     });
 
-    // 7. Delete all workspace members
+    // 7. Workspace DMs
+    await prisma.conversationReadStatus.deleteMany({
+      where: { conversation: { workspaceId: workspaceId } },
+    });
+    await prisma.conversationParticipant.deleteMany({
+      where: { conversation: { workspaceId: workspaceId } },
+    });
+    await prisma.conversation.deleteMany({
+      where: { workspaceId: workspaceId },
+    });
+
+    // 8–9. Members and workspace (UserRecent rows cascade on workspace)
     await prisma.member.deleteMany({
       where: {
         workspaceId: workspaceId
       }
     });
-
-    // 8. Finally delete the workspace itself
     await prisma.workspace.delete({
       where: {
         id: workspaceId
