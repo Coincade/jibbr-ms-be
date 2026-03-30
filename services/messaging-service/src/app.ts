@@ -1,7 +1,6 @@
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import compression from 'compression';
-import { appLimiter } from './config/rateLimit.js';
 
 type CreateMessagingAppOptions = {
   isDbConnected?: () => boolean;
@@ -49,8 +48,6 @@ export const createMessagingApp = ({
     }
     return next();
   });
-
-  app.use(appLimiter);
 
   return app;
 };
