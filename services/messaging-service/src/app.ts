@@ -12,6 +12,12 @@ export const createMessagingApp = ({
 }: CreateMessagingAppOptions = {}): Application => {
   const app: Application = express();
 
+  // DigitalOcean/App Platform (and most reverse proxies) set X-Forwarded-For.
+  // express-rate-limit expects `trust proxy` enabled in that setup, otherwise it throws
+  // ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and/or mis-identifies clients.
+  // `1` trusts exactly one proxy hop (safe default for typical deployments).
+  app.set('trust proxy', 1);
+
   app.use(
     cors({
       origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
