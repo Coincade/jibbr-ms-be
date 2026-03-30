@@ -33,8 +33,9 @@ export const addClientToChannel = (socket: SocketLike, channelId: string, channe
     channelClients.set(channelId, new Set());
   }
   channelClients.get(channelId)!.add(socket);
-  
-  console.log(`Client ${socket.id} added to channel ${channelId}`);
+  if (process.env.WS_DEBUG === '1') {
+    console.log(`Client ${socket.id} added to channel ${channelId}`);
+  }
 };
 
 /**
@@ -48,8 +49,9 @@ export const addClientToConversation = (socket: SocketLike, conversationId: stri
     conversationClients.set(conversationId, new Set());
   }
   conversationClients.get(conversationId)!.add(socket);
-  
-  console.log(`Client ${socket.id} added to conversation ${conversationId}`);
+  if (process.env.WS_DEBUG === '1') {
+    console.log(`Client ${socket.id} added to conversation ${conversationId}`);
+  }
 };
 
 /**
@@ -60,7 +62,9 @@ export const removeClientFromAllChannels = (socket: SocketLike, channelClients: 
     if (clients.has(socket)) {
       clients.delete(socket);
       socket.leave(channelId);
-      console.log(`Client ${socket.id} removed from channel ${channelId}`);
+      if (process.env.WS_DEBUG === '1') {
+        console.log(`Client ${socket.id} removed from channel ${channelId}`);
+      }
     }
   }
 };
@@ -73,7 +77,9 @@ export const removeClientFromAllConversations = (socket: SocketLike, conversatio
     if (clients.has(socket)) {
       clients.delete(socket);
       socket.leave(conversationId);
-      console.log(`Client ${socket.id} removed from conversation ${conversationId}`);
+      if (process.env.WS_DEBUG === '1') {
+        console.log(`Client ${socket.id} removed from conversation ${conversationId}`);
+      }
     }
   }
 };

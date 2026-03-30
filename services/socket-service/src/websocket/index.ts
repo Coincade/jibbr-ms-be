@@ -46,6 +46,38 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
 
   io = wsIo;
 
+  // Server-side heartbeat (native WS ping/pong) to kill half-open connections quickly.
+  // This prevents long stalls and reduces tail latency under flaky networks.
+  const HEARTBEAT_INTERVAL_MS = 25_000;
+  const heartbeat = setInterval(() => {
+    try {
+      wss.clients.forEach((ws: any) => {
+        if (ws.isAlive === false) {
+          try {
+            ws.terminate();
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        ws.isAlive = false;
+        try {
+          ws.ping();
+        } catch {
+          try {
+            ws.terminate();
+          } catch {
+            // ignore
+          }
+        }
+      });
+    } catch (err) {
+      console.error('[ws] Heartbeat loop error:', err);
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+
+  wss.on('close', () => clearInterval(heartbeat));
+
   // Streams consumer broadcasts -> same io-like API
   (async () => {
     try {
@@ -61,6 +93,11 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
   })();
 
   wss.on('connection', (ws, req) => {
+    (ws as any).isAlive = true;
+    ws.on('pong', () => {
+      (ws as any).isAlive = true;
+    });
+
     const user = authenticateFromRequestUrl(req.url);
     if (!user) {
       try {
@@ -107,6 +144,11 @@ const handleConnection = (socket: SocketLike): void => {
     return;
   }
 
+  // Cache per-socket authorization so hot paths (typing/presence) stay DB-free.
+  // Populated on join_* events after validation.
+  (socket.data as any).allowedChannels = new Set<string>();
+  (socket.data as any).allowedConversations = new Set<string>();
+
   // Personal room for direct messaging + notifications
   socket.join(`user_${user.id}`);
 
@@ -134,9 +176,15 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('add_direct_reaction', async (data) => handleAddDirectReactionEvent(socket, data));
   socket.on('remove_direct_reaction', async (data) => handleRemoveDirectReactionEvent(socket, data));
 
-  socket.on('join_channel', (data) => {
+  socket.on('join_channel', async (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
+    const isMember = await validateChannelMembership(user.id, channelId);
+    if (!isMember) {
+      socket.emit('error', { message: 'You are not a member of this channel' });
+      return;
+    }
+    (socket.data as any).allowedChannels?.add(channelId);
     addClientToChannel(socket, channelId, channelClients);
     socket.emit('joined_channel', { channelId });
   });
@@ -145,12 +193,19 @@ const handleConnection = (socket: SocketLike): void => {
     const { channelId } = data || {};
     if (!channelId) return;
     removeClientFromAllChannels(socket, channelClients);
+    (socket.data as any).allowedChannels?.delete(channelId);
     socket.emit('left_channel', { channelId });
   });
 
-  socket.on('join_conversation', (data) => {
+  socket.on('join_conversation', async (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
+    const isParticipant = await validateConversationParticipation(user.id, conversationId);
+    if (!isParticipant) {
+      socket.emit('error', { message: 'You are not a participant of this conversation' });
+      return;
+    }
+    (socket.data as any).allowedConversations?.add(conversationId);
     addClientToConversation(socket, conversationId, conversationClients);
     socket.emit('conversation_joined', { conversationId });
   });
@@ -159,32 +214,29 @@ const handleConnection = (socket: SocketLike): void => {
     const { conversationId } = data || {};
     if (!conversationId) return;
     removeClientFromAllConversations(socket, conversationClients);
+    (socket.data as any).allowedConversations?.delete(conversationId);
     socket.emit('conversation_left', { conversationId });
   });
 
-  socket.on('typing_start', async (data) => {
+  socket.on('typing_start', (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
-    const isMember = await validateChannelMembership(user.id, channelId);
-    if (!isMember) return;
-    addClientToChannel(socket, channelId, channelClients);
+    // DB-free hot path: only allow typing if the socket joined + was validated
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
     socket.to(channelId).emit('typing_start', { userId: user.id, userName: user.name, channelId });
   });
 
-  socket.on('typing_stop', async (data) => {
+  socket.on('typing_stop', (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
-    const isMember = await validateChannelMembership(user.id, channelId);
-    if (!isMember) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
     socket.to(channelId).emit('typing_stop', { userId: user.id, userName: user.name, channelId });
   });
 
-  socket.on('direct_typing_start', async (data) => {
+  socket.on('direct_typing_start', (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
-    const isParticipant = await validateConversationParticipation(user.id, conversationId);
-    if (!isParticipant) return;
-    addClientToConversation(socket, conversationId, conversationClients);
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
     socket.to(conversationId).emit('direct_typing_start', {
       userId: user.id,
       userName: user.name,
@@ -192,11 +244,10 @@ const handleConnection = (socket: SocketLike): void => {
     });
   });
 
-  socket.on('direct_typing_stop', async (data) => {
+  socket.on('direct_typing_stop', (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
-    const isParticipant = await validateConversationParticipation(user.id, conversationId);
-    if (!isParticipant) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
     socket.to(conversationId).emit('direct_typing_stop', {
       userId: user.id,
       userName: user.name,

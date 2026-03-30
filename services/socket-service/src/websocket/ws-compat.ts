@@ -39,7 +39,16 @@ const safeJsonParse = (raw: string): any | null => {
 
 const sendFrame = (ws: WebSocket, frame: any) => {
   if (ws.readyState !== WebSocket.OPEN) return;
+  // Basic backpressure guard: if client is slow, avoid unbounded buffering.
+  // Typing/presence are best-effort and will be dropped by callers if needed.
+  if ((ws as any).bufferedAmount && (ws as any).bufferedAmount > 2_000_000) return;
   ws.send(JSON.stringify(frame));
+};
+
+const sendJson = (ws: WebSocket, json: string) => {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  if ((ws as any).bufferedAmount && (ws as any).bufferedAmount > 2_000_000) return;
+  ws.send(json);
 };
 
 class WsSocket implements SocketLike {
@@ -79,9 +88,10 @@ class WsSocket implements SocketLike {
       emit: (event: string, data: JsonRecord = {}) => {
         const clients = this.roomMap.get(room);
         if (!clients) return;
+        const json = JSON.stringify({ type: event, ...(data ?? {}) });
         clients.forEach((client) => {
           if (client.id === this.id) return;
-          client.emit(event, data);
+          sendJson(client.ws, json);
         });
       },
     };
@@ -132,13 +142,15 @@ export function createWsServer(server: HttpServer): {
 
   const io: IoLike = {
     emit: (event: string, data: JsonRecord = {}) => {
-      allClients.forEach((client) => client.emit(event, data));
+      const json = JSON.stringify({ type: event, ...(data ?? {}) });
+      allClients.forEach((client) => sendJson(client.ws, json));
     },
     to: (room: string) => ({
       emit: (event: string, data: JsonRecord = {}) => {
         const clients = roomMap.get(room);
         if (!clients) return;
-        clients.forEach((client) => client.emit(event, data));
+        const json = JSON.stringify({ type: event, ...(data ?? {}) });
+        clients.forEach((client) => sendJson(client.ws, json));
       },
     }),
     clientsCount: () => allClients.size,
