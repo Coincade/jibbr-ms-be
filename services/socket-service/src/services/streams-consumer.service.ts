@@ -1,4 +1,4 @@
-import { Server as SocketIOServer } from 'socket.io';
+import type { IoLike } from '../websocket/ws-compat.js';
 import { createStreamRedisClient } from '../config/redis.js';
 import {
   STREAMS,
@@ -23,7 +23,7 @@ type StreamEvent = {
   source?: string;
 };
 
-let ioInstance: SocketIOServer | null = null;
+let ioInstance: IoLike | null = null;
 type StreamRedisClient = Awaited<ReturnType<typeof createStreamRedisClient>>;
 let streamClientPromise: Promise<StreamRedisClient> | null = null;
 let isRunning = false;
@@ -154,7 +154,7 @@ const claimStaleMessages = async (
 /**
  * Initialize Streams consumer with Socket.IO instance
  */
-export function setSocketIOInstance(io: SocketIOServer) {
+export function setSocketIOInstance(io: IoLike) {
   ioInstance = io;
 }
 
@@ -237,7 +237,8 @@ async function handleMessageEvent(event: StreamEvent) {
         });
         console.log(`[Streams] Broadcasted message.created to channel: ${data.channelId}`);
       } else if (data.conversationId) {
-        ioInstance.to(`conversation:${data.conversationId}`).emit('new_direct_message', {
+        // Unify room naming: conversation room key is the conversationId itself
+        ioInstance.to(String(data.conversationId)).emit('new_direct_message', {
           message: data,
           timestamp: event.timestamp,
         });
@@ -255,7 +256,7 @@ async function handleMessageEvent(event: StreamEvent) {
         });
         console.log(`[Streams] Broadcasted message.updated to channel: ${data.channelId}`);
       } else if (data.conversationId) {
-        ioInstance.to(`conversation:${data.conversationId}`).emit('direct_message_edited', {
+        ioInstance.to(String(data.conversationId)).emit('direct_message_edited', {
           messageId: data.id,
           content: data.content,
           updatedAt: data.updatedAt,
@@ -274,7 +275,7 @@ async function handleMessageEvent(event: StreamEvent) {
         });
         console.log(`[Streams] Broadcasted message.deleted to channel: ${data.channelId}`);
       } else if (data.conversationId) {
-        ioInstance.to(`conversation:${data.conversationId}`).emit('direct_message_deleted', {
+        ioInstance.to(String(data.conversationId)).emit('direct_message_deleted', {
           messageId: data.id,
           deletedAt: data.deletedAt,
           timestamp: event.timestamp,
@@ -299,7 +300,8 @@ async function handleNotificationEvent(event: StreamEvent) {
   switch (type) {
     case 'notification.created':
       if (data.userId) {
-        ioInstance.to(`user:${data.userId}`).emit('notification', {
+        // Unify room naming: user room key is `user_${id}`
+        ioInstance.to(`user_${data.userId}`).emit('notification', {
           notification: data,
           timestamp: event.timestamp,
         });

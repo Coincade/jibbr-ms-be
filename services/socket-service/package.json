@@ -11,18 +11,42 @@
     "dev": "concurrently \"npm run watch\" \"npm run server\"",
     "build": "tsc",
     "test": "jest",
+    "test:e2e": "jest --runInBand --testPathPattern=\\.e2e\\.test\\.ts$",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src --ext .ts",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
+  "jest": {
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/src"
+    ],
+    "testMatch": [
+      "**/*.test.ts"
+    ],
+    "extensionsToTreatAsEsm": [
+      ".ts"
+    ],
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "transform": {
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "useESM": true,
+          "tsconfig": "<rootDir>/tsconfig.json"
+        }
+      ]
+    }
+  },
   "dependencies": {
     "@jibbr/auth-middleware": "*",
     "@jibbr/database": "*",
     "@jibbr/shared-utils": "*",
     "@jibbr/logger": "*",
-    "@socket.io/redis-adapter": "^8.3.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "expo-server-sdk": "^4.0.0",
@@ -30,7 +54,7 @@
     "jsonwebtoken": "^9.0.2",
     "redis": "^4.7.0",
     "sanitize-html": "^2.17.0",
-    "socket.io": "^4.8.1",
+    "ws": "^8.18.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
@@ -39,6 +63,7 @@
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.7.4",
     "@types/sanitize-html": "^2.16.0",
+    "@types/ws": "^8.18.1",
     "@types/jest": "^29.5.14",
     "@types/supertest": "^6.0.3",
     "concurrently": "^9.1.2",

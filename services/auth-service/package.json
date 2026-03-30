@@ -13,6 +13,7 @@
     "copy-files": "copyfiles -u 1 \"src/views/**/*\" dist/",
     "watch-views": "nodemon --watch src/views -e ejs -x \"npm run copy-files\"",
     "test": "jest",
+    "test:e2e": "jest --runInBand --testPathPattern=\\.e2e\\.test\\.ts$",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src --ext .ts",
@@ -22,6 +23,30 @@
     "db:migrate": "cd ../../packages/database && npm run db:migrate",
     "db:studio": "cd ../../packages/database && npm run db:studio",
     "send-test-email": "npx tsx src/scripts/send-test-email.ts"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/src"
+    ],
+    "testMatch": [
+      "**/*.test.ts"
+    ],
+    "extensionsToTreatAsEsm": [
+      ".ts"
+    ],
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "transform": {
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "useESM": true,
+          "tsconfig": "<rootDir>/tsconfig.json"
+        }
+      ]
+    }
   },
   "dependencies": {
     "@jibbr/auth-middleware": "*",

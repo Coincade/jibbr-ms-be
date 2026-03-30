@@ -34,6 +34,7 @@ export const handleSendDirectMessage = async (
     if (!socket.data.user) {
       throw new Error('User not authenticated');
     }
+    const userId = socket.data.user.id;
 
     // Validate input
     const payload = sendDirectMessageSchema.parse({
@@ -252,7 +253,7 @@ export const handleSendDirectMessage = async (
         await NotificationService.notifyNewDirectMessage(
           data.conversationId,
           message.id,
-          socket.data.user.id,
+          userId,
           payload.content
         );
       } catch (error) {

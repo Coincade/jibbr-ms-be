@@ -20,6 +20,7 @@ export const handleSendMessage = async (
     if (!socket.data.user) {
       throw new Error('User not authenticated');
     }
+    const userId = socket.data.user.id;
 
     // Validate input
     const payload = sendMessageSchema.parse({
@@ -241,7 +242,7 @@ export const handleSendMessage = async (
             message.id,
             data.channelId!,
             mentionedUserIds,
-            socket.data.user.id,
+            userId,
             io
           );
 
@@ -280,7 +281,7 @@ export const handleSendMessage = async (
           await NotificationService.notifyNewChannelMessage(
             data.channelId!,
             message.id,
-            socket.data.user.id,
+            userId,
             payload.content,
             channel.name
           );

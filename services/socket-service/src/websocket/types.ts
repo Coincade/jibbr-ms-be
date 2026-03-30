@@ -1,15 +1,7 @@
-import { Socket } from 'socket.io';
-import { JwtPayload } from 'jsonwebtoken';
+import type { SocketLike } from './ws-compat.js';
 
-// Re-export Socket for convenience
-export { Socket };
-
-// Socket.IO client with user info
-export interface SocketWithUser extends Socket {
-  data: {
-    user?: JwtPayload & { id: string; name?: string; image?: string };
-  };
-}
+// Compatibility export: handlers import `Socket` today
+export type Socket = SocketLike;
 
 // Client message types (from client to server)
 export interface ClientMessage {

@@ -2,10 +2,10 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import dotenv from 'dotenv';
 import path from 'path';
-import express, { Application, Request, Response } from 'express';
-import cors from 'cors';
 import { createServer } from 'http';
 import { Logger } from '@jibbr/logger';
+import { createSocketApp } from './app.js';
+import presenceRoutes from './routes/presence.route.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -25,34 +25,13 @@ if (result.error) {
   });
 }
 
-const app: Application = express();
+const app = createSocketApp();
 const httpServer = createServer(app);
 const logger = new Logger('socket-service');
 
-const PORT = process.env.PORT || process.env.SOCKET_PORT || 3004;
-
-// Middleware
-app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
-  credentials: true,
-}));
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-
-// Health check
-app.get('/health', (_req: Request, res: Response) => {
-  res.json({
-    status: 'healthy',
-    service: 'socket-service',
-    uptime: process.uptime(),
-    memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// Presence routes (copied from messaging-service, but now local)
-import presenceRoutes from './routes/presence.route.js';
 app.use('/api/presence', presenceRoutes);
+
+const PORT = process.env.PORT || process.env.SOCKET_PORT || 3004;
 
 // Initialize WebSocket service
 (async () => {

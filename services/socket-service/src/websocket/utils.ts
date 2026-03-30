@@ -1,10 +1,10 @@
-import { Socket } from 'socket.io';
 import { JwtPayload } from 'jsonwebtoken';
 import jwt from 'jsonwebtoken';
 import { ChannelClientsMap, ConversationClientsMap } from './types.js';
+import type { SocketLike } from './ws-compat.js';
 
-// Socket.IO client with user info
-export interface SocketWithUser extends Socket {
+// Socket-like client with user info
+export interface SocketWithUser extends SocketLike {
   data: {
     user?: JwtPayload & { id: string; name?: string; image?: string };
   };
@@ -26,7 +26,7 @@ export const authenticateSocket = (token: string): JwtPayload & { id: string; na
 /**
  * Add client to channel room
  */
-export const addClientToChannel = (socket: Socket, channelId: string, channelClients: ChannelClientsMap): void => {
+export const addClientToChannel = (socket: SocketLike, channelId: string, channelClients: ChannelClientsMap): void => {
   socket.join(channelId);
   
   if (!channelClients.has(channelId)) {
@@ -40,7 +40,8 @@ export const addClientToChannel = (socket: Socket, channelId: string, channelCli
 /**
  * Add client to conversation room
  */
-export const addClientToConversation = (socket: Socket, conversationId: string, conversationClients: ConversationClientsMap): void => {
+export const addClientToConversation = (socket: SocketLike, conversationId: string, conversationClients: ConversationClientsMap): void => {
+  // Unify room naming: conversation room key is the conversationId itself
   socket.join(conversationId);
   
   if (!conversationClients.has(conversationId)) {
@@ -54,7 +55,7 @@ export const addClientToConversation = (socket: Socket, conversationId: string, 
 /**
  * Remove client from all channels
  */
-export const removeClientFromAllChannels = (socket: Socket, channelClients: ChannelClientsMap): void => {
+export const removeClientFromAllChannels = (socket: SocketLike, channelClients: ChannelClientsMap): void => {
   for (const [channelId, clients] of channelClients.entries()) {
     if (clients.has(socket)) {
       clients.delete(socket);
@@ -67,7 +68,7 @@ export const removeClientFromAllChannels = (socket: Socket, channelClients: Chan
 /**
  * Remove client from all conversations
  */
-export const removeClientFromAllConversations = (socket: Socket, conversationClients: ConversationClientsMap): void => {
+export const removeClientFromAllConversations = (socket: SocketLike, conversationClients: ConversationClientsMap): void => {
   for (const [conversationId, clients] of conversationClients.entries()) {
     if (clients.has(socket)) {
       clients.delete(socket);

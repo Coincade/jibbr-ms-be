@@ -1,4 +1,4 @@
-import { Socket } from 'socket.io';
+import type { Socket } from '../types.js';
 import prisma from '../../config/database.js';
 import { z } from 'zod';
 

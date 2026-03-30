@@ -11,6 +11,7 @@
     "dev": "concurrently \"npm run watch\" \"npm run server\"",
     "build": "tsc",
     "test": "jest",
+    "test:e2e": "jest --runInBand --testPathPattern=\\.e2e\\.test\\.ts$",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src --ext .ts",
@@ -19,6 +20,30 @@
     "db:generate": "cd ../../packages/database && npm run db:generate",
     "db:migrate": "cd ../../packages/database && npm run db:migrate",
     "db:studio": "cd ../../packages/database && npm run db:studio"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/src"
+    ],
+    "testMatch": [
+      "**/*.test.ts"
+    ],
+    "extensionsToTreatAsEsm": [
+      ".ts"
+    ],
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "transform": {
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "useESM": true,
+          "tsconfig": "<rootDir>/tsconfig.json"
+        }
+      ]
+    }
   },
   "dependencies": {
     "@jibbr/auth-middleware": "*",
