@@ -5,6 +5,7 @@ export const sendMessageSchema = z
   .object({
     content: z.string().max(2000, 'Message too long'),
     channelId: z.string().min(1, 'Channel ID is required'),
+    clientMessageId: z.string().min(1).max(128).optional(),
     replyToId: z.string().optional(), // Optional reply to another message
     isThreadReply: z.boolean().optional(), // When true, mark parent message as thread so all clients show thread UI
     forwardedFromMessageId: z.string().optional(), // When forwarding, original message id for ForwardedMessage record
@@ -35,6 +36,7 @@ export const sendDirectMessageSchema = z
   .object({
     content: z.string().max(2000, 'Message too long'),
     conversationId: z.string().min(1, 'Conversation ID is required'),
+    clientMessageId: z.string().min(1).max(128).optional(),
     replyToId: z.string().optional(), // Optional reply to another message
     isThreadReply: z.boolean().optional(), // When true, mark parent message as thread so all clients show thread UI
     forwardedFromMessageId: z.string().optional(), // When forwarding, original message id for ForwardedMessage record
@@ -64,6 +66,7 @@ export const sendDirectMessageSchema = z
 export const reactToMessageSchema = z.object({
   messageId: z.string().min(1, 'Message ID is required'),
   emoji: z.string().min(1, 'Emoji is required').max(10, 'Emoji too long'),
+  clientOpId: z.string().min(1).max(128).optional(),
 });
 
 // Forward message validation
@@ -91,6 +94,7 @@ export const getMessageSchema = z.object({
 // Delete message validation
 export const deleteMessageSchema = z.object({
   messageId: z.string().min(1, 'Message ID is required'),
+  clientOpId: z.string().min(1).max(128).optional(),
 });
 
 // Update message validation
@@ -100,12 +104,14 @@ export const updateMessageSchema = z.object({
     .string()
     .min(1, 'Message content is required')
     .max(2000, 'Message too long'),
+  clientOpId: z.string().min(1).max(128).optional(),
 });
 
 // Remove reaction validation
 export const removeReactionSchema = z.object({
   messageId: z.string().min(1, 'Message ID is required'),
   emoji: z.string().min(1, 'Emoji is required'),
+  clientOpId: z.string().min(1).max(128).optional(),
 });
 
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;

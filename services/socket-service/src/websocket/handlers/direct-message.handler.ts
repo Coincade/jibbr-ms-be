@@ -40,6 +40,7 @@ export const handleSendDirectMessage = async (
     const payload = sendDirectMessageSchema.parse({
       content: data.content,
       conversationId: data.conversationId,
+      clientMessageId: (data as any).clientMessageId,
       replyToId: data.replyToId,
       isThreadReply: data.isThreadReply,
       forwardedFromMessageId: data.forwardedFromMessageId,
@@ -75,6 +76,62 @@ export const handleSendDirectMessage = async (
 
     // Save message to database
     const { default: prisma } = await import('../../config/database.js');
+
+    // Idempotency: if the client retries the same message, return the previously created message.
+    if (payload.clientMessageId) {
+      const existing = await prisma.message.findFirst({
+        where: {
+          userId: socket.data.user.id,
+          clientMessageId: payload.clientMessageId,
+        },
+        include: {
+          user: { select: { id: true, name: true, image: true } },
+          replyTo: {
+            include: { user: { select: { id: true, name: true } } },
+          },
+          attachments: true,
+          reactions: { include: { user: { select: { id: true, name: true } } } },
+        },
+      });
+
+      if (existing && !existing.deletedAt) {
+        socket.emit('message_sent', {
+          id: existing.id,
+          clientMessageId: payload.clientMessageId,
+          content: existing.content,
+          channelId: existing.channelId,
+          conversationId: existing.conversationId,
+          userId: existing.userId,
+          createdAt: existing.createdAt.toISOString(),
+          updatedAt: existing.updatedAt.toISOString(),
+          replyToId: existing.replyToId,
+          isThread: existing.isThread,
+          user: {
+            id: existing.user.id,
+            name: existing.user.name ?? undefined,
+            image: existing.user.image ?? undefined,
+          },
+          attachments: (existing.attachments || []).map((att: any) => ({
+            id: att.id,
+            filename: att.filename,
+            originalName: att.originalName,
+            mimeType: att.mimeType,
+            size: att.size,
+            url: att.url,
+            createdAt: att.createdAt.toISOString(),
+          })),
+          reactions: (existing.reactions || []).map((r: any) => ({
+            id: r.id,
+            emoji: r.emoji,
+            messageId: r.messageId,
+            userId: r.userId,
+            createdAt: r.createdAt.toISOString(),
+            user: { id: r.user.id, name: r.user.name ?? undefined },
+          })),
+        });
+        return;
+      }
+    }
 
     // If replying, check if the original message exists and is not deleted
     if (payload.replyToId) {
@@ -119,6 +176,7 @@ export const handleSendDirectMessage = async (
       conversationId: data.conversationId,
       userId: socket.data.user.id,
       replyToId: payload.replyToId,
+      clientMessageId: payload.clientMessageId,
     };
 
     // OPTIMIZATION: Create message with minimal includes for faster DB write
@@ -173,6 +231,7 @@ export const handleSendDirectMessage = async (
     const attachments = data.attachments || [];
     const broadcastMessage: DirectMessageData = {
       id: message.id,
+      clientMessageId: payload.clientMessageId,
       content: message.content,
       conversationId: data.conversationId,
       userId: message.userId,
@@ -207,6 +266,7 @@ export const handleSendDirectMessage = async (
     socket.emit('message_sent', {
       ...broadcastMessage,
       id: message.id, // Ensure we use the real message ID
+      clientMessageId: payload.clientMessageId,
       ...(parentMessageUpdated && { parentMessageUpdated }),
     });
 
@@ -293,6 +353,7 @@ export const handleEditDirectMessage = async (
     const payload = updateMessageSchema.parse({
       messageId: data.messageId,
       content: data.content,
+      clientOpId: (data as any).clientOpId,
     });
 
     // Validate conversation participation
@@ -332,6 +393,14 @@ export const handleEditDirectMessage = async (
       messageId: data.messageId,
       content: contentForDb,
     });
+
+    if (payload.clientOpId) {
+      socket.emit('direct_message_edited_ack', {
+        clientOpId: payload.clientOpId,
+        messageId: data.messageId,
+        conversationId: data.conversationId,
+      });
+    }
   } catch (error) {
     if (error instanceof ZodError) {
       socket.emit('error', { message: 'Invalid message data' });
@@ -402,6 +471,14 @@ export const handleDeleteDirectMessage = async (
     socket.to(data.conversationId).emit('direct_message_deleted', {
       messageId: data.messageId,
     });
+
+    if ((data as any).clientOpId) {
+      socket.emit('direct_message_deleted_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        conversationId: data.conversationId,
+      });
+    }
   } catch (error) {
     console.error('Error handling delete direct message:', error);
     socket.emit('error', {
@@ -470,6 +547,17 @@ export const handleAddDirectReaction = async (
       ...reaction,
       createdAt: reaction.createdAt.toISOString(),
     });
+
+    if ((data as any).clientOpId) {
+      socket.emit('direct_reaction_added_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: reaction.messageId,
+        emoji: reaction.emoji,
+        userId: reaction.userId,
+        reactionId: reaction.id,
+        conversationId: data.conversationId,
+      });
+    }
   } catch (error) {
     console.error('Error handling add direct reaction:', error);
     socket.emit('error', {
@@ -529,6 +617,16 @@ export const handleRemoveDirectReaction = async (
       emoji: data.emoji,
       userId: socket.data.user.id,
     });
+
+    if ((data as any).clientOpId) {
+      socket.emit('direct_reaction_removed_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        emoji: data.emoji,
+        userId: socket.data.user.id,
+        conversationId: data.conversationId,
+      });
+    }
   } catch (error) {
     console.error('Error handling remove direct reaction:', error);
     socket.emit('error', {

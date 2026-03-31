@@ -51,6 +51,17 @@ export const handleAddReaction = async (
       },
     });
 
+    // Ack to sender (used for offline queue + bounded retries)
+    if ((data as any).clientOpId) {
+      socket.emit('reaction_added_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: reaction.messageId,
+        emoji: reaction.emoji,
+        userId: reaction.userId,
+        reactionId: reaction.id,
+      });
+    }
+
   } catch (error) {
     console.error('Error handling add reaction:', error);
     socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to add reaction' });
@@ -100,6 +111,15 @@ export const handleRemoveReaction = async (
       emoji: data.emoji,
       userId: socket.data.user.id,
     });
+
+    if ((data as any).clientOpId) {
+      socket.emit('reaction_removed_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        emoji: data.emoji,
+        userId: socket.data.user.id,
+      });
+    }
 
   } catch (error) {
     console.error('Error handling remove reaction:', error);

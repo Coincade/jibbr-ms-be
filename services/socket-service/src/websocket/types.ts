@@ -34,6 +34,7 @@ export interface EditMessageMessage extends ClientMessage {
   content: string;
   channelId?: string;
   conversationId?: string;
+  clientOpId?: string;
 }
 
 export interface EditDirectMessageMessage extends ClientMessage {
@@ -41,6 +42,7 @@ export interface EditDirectMessageMessage extends ClientMessage {
   messageId: string;
   content: string;
   conversationId: string;
+  clientOpId?: string;
 }
 
 export interface DeleteMessageMessage extends ClientMessage {
@@ -48,12 +50,14 @@ export interface DeleteMessageMessage extends ClientMessage {
   messageId: string;
   channelId?: string;
   conversationId?: string;
+  clientOpId?: string;
 }
 
 export interface DeleteDirectMessageMessage extends ClientMessage {
   type: 'delete_direct_message';
   messageId: string;
   conversationId: string;
+  clientOpId?: string;
 }
 
 export interface ForwardMessageMessage extends ClientMessage {
@@ -78,6 +82,7 @@ export interface AddReactionMessage extends ClientMessage {
   emoji: string;
   channelId?: string;
   conversationId?: string;
+  clientOpId?: string;
 }
 
 export interface AddDirectReactionMessage extends ClientMessage {
@@ -85,6 +90,7 @@ export interface AddDirectReactionMessage extends ClientMessage {
   messageId: string;
   emoji: string;
   conversationId: string;
+  clientOpId?: string;
 }
 
 export interface RemoveReactionMessage extends ClientMessage {
@@ -93,6 +99,7 @@ export interface RemoveReactionMessage extends ClientMessage {
   emoji: string;
   channelId?: string;
   conversationId?: string;
+  clientOpId?: string;
 }
 
 export interface RemoveDirectReactionMessage extends ClientMessage {
@@ -100,6 +107,7 @@ export interface RemoveDirectReactionMessage extends ClientMessage {
   messageId: string;
   emoji: string;
   conversationId: string;
+  clientOpId?: string;
 }
 
 // Direct messaging events
@@ -247,6 +255,7 @@ export interface PongEvent extends ServerMessage {
 // Data types
 export interface MessageData {
   id: string;
+  clientMessageId?: string;
   content: string;
   channelId: string;
   userId: string;
@@ -264,6 +273,7 @@ export interface MessageData {
 
 export interface DirectMessageData {
   id: string;
+  clientMessageId?: string;
   content: string;
   conversationId: string;
   userId: string;

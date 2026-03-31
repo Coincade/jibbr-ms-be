@@ -151,6 +151,8 @@ model ConversationParticipant {
 
 model Message {
   id                String             @id @default(cuid())
+  /** Client-generated idempotency key for WS/HTTP retries */
+  clientMessageId   String?
   content           String
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @default(now()) @updatedAt
@@ -178,6 +180,7 @@ model Message {
   @@index([userId, createdAt(sort: Desc)])
   @@index([deletedAt])
   @@index([replyToId])
+  @@unique([userId, clientMessageId])
 }
 
 model Attachment {
