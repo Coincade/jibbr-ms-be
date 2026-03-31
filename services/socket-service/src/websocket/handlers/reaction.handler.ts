@@ -13,9 +13,10 @@ export const handleAddReaction = async (
     if (!socket.data.user) {
       throw new Error('User not authenticated');
     }
+    const currentUserId = socket.data.user.id;
 
     // Validate channel membership
-    const isMember = await validateChannelMembership(socket.data.user.id, data.channelId!);
+    const isMember = await validateChannelMembership(currentUserId, data.channelId!);
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
@@ -26,7 +27,7 @@ export const handleAddReaction = async (
       data: {
         emoji: data.emoji,
         messageId: data.messageId,
-        userId: socket.data.user.id,
+        userId: currentUserId,
       },
       include: {
         user: {
@@ -63,6 +64,45 @@ export const handleAddReaction = async (
     }
 
   } catch (error) {
+    // Idempotent replay: reaction may already exist from a previous successful attempt.
+    const code = (error as any)?.code;
+    if (code === 'P2002') {
+      const currentUserId = socket.data.user?.id;
+      if (!currentUserId) {
+        console.error('Error handling add reaction:', error);
+        socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to add reaction' });
+        return;
+      }
+      const { default: prisma } = await import('../../config/database.js');
+      const existing = await prisma.reaction.findFirst({
+        where: {
+          messageId: data.messageId,
+          userId: currentUserId,
+          emoji: data.emoji,
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      });
+      if (existing) {
+        if ((data as any).clientOpId) {
+          socket.emit('reaction_added_ack', {
+            clientOpId: (data as any).clientOpId,
+            messageId: existing.messageId,
+            emoji: existing.emoji,
+            userId: existing.userId,
+            reactionId: existing.id,
+            noop: true,
+          });
+        }
+        return;
+      }
+    }
     console.error('Error handling add reaction:', error);
     socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to add reaction' });
   }
@@ -80,9 +120,10 @@ export const handleRemoveReaction = async (
     if (!socket.data.user) {
       throw new Error('User not authenticated');
     }
+    const currentUserId = socket.data.user.id;
 
     // Validate channel membership
-    const isMember = await validateChannelMembership(socket.data.user.id, data.channelId!);
+    const isMember = await validateChannelMembership(currentUserId, data.channelId!);
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
@@ -92,12 +133,22 @@ export const handleRemoveReaction = async (
     const reaction = await prisma.reaction.findFirst({
       where: {
         messageId: data.messageId,
-        userId: socket.data.user.id,
+        userId: currentUserId,
         emoji: data.emoji,
       },
     });
 
     if (!reaction) {
+      if ((data as any).clientOpId) {
+        socket.emit('reaction_removed_ack', {
+          clientOpId: (data as any).clientOpId,
+          messageId: data.messageId,
+          emoji: data.emoji,
+          userId: currentUserId,
+          noop: true,
+        });
+        return;
+      }
       throw new Error('Reaction not found');
     }
 
@@ -109,7 +160,7 @@ export const handleRemoveReaction = async (
     socket.to(data.channelId!).emit('reaction_removed', {
       messageId: data.messageId,
       emoji: data.emoji,
-      userId: socket.data.user.id,
+      userId: currentUserId,
     });
 
     if ((data as any).clientOpId) {
@@ -117,11 +168,24 @@ export const handleRemoveReaction = async (
         clientOpId: (data as any).clientOpId,
         messageId: data.messageId,
         emoji: data.emoji,
-        userId: socket.data.user.id,
+        userId: currentUserId,
       });
     }
 
   } catch (error) {
+    const code = (error as any)?.code;
+    const msg = error instanceof Error ? error.message.toLowerCase() : '';
+    const currentUserId = socket.data.user?.id;
+    if ((code === 'P2025' || msg.includes('reaction not found')) && (data as any).clientOpId) {
+      socket.emit('reaction_removed_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        emoji: data.emoji,
+        userId: currentUserId || '',
+        noop: true,
+      });
+      return;
+    }
     console.error('Error handling remove reaction:', error);
     socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to remove reaction' });
   }

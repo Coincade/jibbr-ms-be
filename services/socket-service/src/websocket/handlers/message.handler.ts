@@ -396,6 +396,15 @@ export const handleEditMessage = async (
     });
 
     if (!message) {
+      if (payload.clientOpId) {
+        socket.emit('message_edited_ack', {
+          clientOpId: payload.clientOpId,
+          messageId: data.messageId,
+          channelId: data.channelId,
+          noop: true,
+        });
+        return;
+      }
       throw new Error('Message not found');
     }
 
@@ -441,6 +450,20 @@ export const handleEditMessage = async (
     }
 
   } catch (error) {
+    // Idempotent completion for offline replay: if target message no longer exists,
+    // ack the operation so client queue can settle without infinite retries/skips.
+    const messageText = error instanceof Error ? error.message.toLowerCase() : '';
+    const prismaCode = (error as any)?.code;
+    const isNotFound = prismaCode === 'P2025' || messageText.includes('message not found');
+    if (isNotFound && (data as any).clientOpId) {
+      socket.emit('message_edited_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        channelId: data.channelId,
+        noop: true,
+      });
+      return;
+    }
     console.error('Error handling edit message:', error);
     socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to edit message' });
   }
@@ -472,6 +495,15 @@ export const handleDeleteMessage = async (
     });
 
     if (!message) {
+      if ((data as any).clientOpId) {
+        socket.emit('message_deleted_ack', {
+          clientOpId: (data as any).clientOpId,
+          messageId: data.messageId,
+          channelId: data.channelId,
+          noop: true,
+        });
+        return;
+      }
       throw new Error('Message not found');
     }
 
@@ -481,6 +513,15 @@ export const handleDeleteMessage = async (
 
     // Check if message is already deleted
     if (message.deletedAt) {
+      if ((data as any).clientOpId) {
+        socket.emit('message_deleted_ack', {
+          clientOpId: (data as any).clientOpId,
+          messageId: data.messageId,
+          channelId: data.channelId,
+          noop: true,
+        });
+        return;
+      }
       throw new Error('Message is already deleted');
     }
 
@@ -504,6 +545,18 @@ export const handleDeleteMessage = async (
     }
 
   } catch (error) {
+    const messageText = error instanceof Error ? error.message.toLowerCase() : '';
+    const prismaCode = (error as any)?.code;
+    const isIdempotentDelete = prismaCode === 'P2025' || messageText.includes('already deleted') || messageText.includes('message not found');
+    if (isIdempotentDelete && (data as any).clientOpId) {
+      socket.emit('message_deleted_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        channelId: data.channelId,
+        noop: true,
+      });
+      return;
+    }
     console.error('Error handling delete message:', error);
     socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to delete message' });
   }

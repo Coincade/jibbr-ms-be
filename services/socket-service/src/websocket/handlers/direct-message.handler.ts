@@ -372,6 +372,15 @@ export const handleEditDirectMessage = async (
     });
 
     if (!message) {
+      if (payload.clientOpId) {
+        socket.emit('direct_message_edited_ack', {
+          clientOpId: payload.clientOpId,
+          messageId: data.messageId,
+          conversationId: data.conversationId,
+          noop: true,
+        });
+        return;
+      }
       throw new Error('Message not found');
     }
 
@@ -402,6 +411,18 @@ export const handleEditDirectMessage = async (
       });
     }
   } catch (error) {
+    const messageText = error instanceof Error ? error.message.toLowerCase() : '';
+    const prismaCode = (error as any)?.code;
+    const isNotFound = prismaCode === 'P2025' || messageText.includes('message not found');
+    if (isNotFound && (data as any).clientOpId) {
+      socket.emit('direct_message_edited_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        conversationId: data.conversationId,
+        noop: true,
+      });
+      return;
+    }
     if (error instanceof ZodError) {
       socket.emit('error', { message: 'Invalid message data' });
     } else {
@@ -428,10 +449,11 @@ export const handleDeleteDirectMessage = async (
     if (!socket.data.user) {
       throw new Error('User not authenticated');
     }
+    const currentUserId = socket.data.user.id;
 
     // Validate conversation participation
     const isParticipant = await validateConversationParticipation(
-      socket.data.user.id,
+      currentUserId,
       data.conversationId
     );
     if (!isParticipant) {
@@ -445,6 +467,15 @@ export const handleDeleteDirectMessage = async (
     });
 
     if (!message) {
+      if ((data as any).clientOpId) {
+        socket.emit('direct_message_deleted_ack', {
+          clientOpId: (data as any).clientOpId,
+          messageId: data.messageId,
+          conversationId: data.conversationId,
+          noop: true,
+        });
+        return;
+      }
       throw new Error('Message not found');
     }
 
@@ -458,6 +489,15 @@ export const handleDeleteDirectMessage = async (
 
     // Check if message is already deleted
     if (message.deletedAt) {
+      if ((data as any).clientOpId) {
+        socket.emit('direct_message_deleted_ack', {
+          clientOpId: (data as any).clientOpId,
+          messageId: data.messageId,
+          conversationId: data.conversationId,
+          noop: true,
+        });
+        return;
+      }
       throw new Error('Message is already deleted');
     }
 
@@ -480,6 +520,18 @@ export const handleDeleteDirectMessage = async (
       });
     }
   } catch (error) {
+    const messageText = error instanceof Error ? error.message.toLowerCase() : '';
+    const prismaCode = (error as any)?.code;
+    const isIdempotentDelete = prismaCode === 'P2025' || messageText.includes('already deleted') || messageText.includes('message not found');
+    if (isIdempotentDelete && (data as any).clientOpId) {
+      socket.emit('direct_message_deleted_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        conversationId: data.conversationId,
+        noop: true,
+      });
+      return;
+    }
     console.error('Error handling delete direct message:', error);
     socket.emit('error', {
       message:
@@ -502,10 +554,11 @@ export const handleAddDirectReaction = async (
     if (!socket.data.user) {
       throw new Error('User not authenticated');
     }
+    const currentUserId = socket.data.user.id;
 
     // Validate conversation participation
     const isParticipant = await validateConversationParticipation(
-      socket.data.user.id,
+      currentUserId,
       data.conversationId
     );
     if (!isParticipant) {
@@ -530,7 +583,7 @@ export const handleAddDirectReaction = async (
       data: {
         emoji: data.emoji,
         messageId: data.messageId,
-        userId: socket.data.user.id,
+        userId: currentUserId,
       },
       include: {
         user: {
@@ -559,6 +612,40 @@ export const handleAddDirectReaction = async (
       });
     }
   } catch (error) {
+    const code = (error as any)?.code;
+    if (code === 'P2002') {
+      const currentUserId = socket.data.user?.id;
+      if (!currentUserId) {
+        console.error('Error handling add direct reaction:', error);
+        socket.emit('error', {
+          message:
+            error instanceof Error ? error.message : 'Failed to add reaction',
+        });
+        return;
+      }
+      const { default: prisma } = await import('../../config/database.js');
+      const existing = await prisma.reaction.findFirst({
+        where: {
+          messageId: data.messageId,
+          userId: currentUserId,
+          emoji: data.emoji,
+        },
+      });
+      if (existing) {
+        if ((data as any).clientOpId) {
+          socket.emit('direct_reaction_added_ack', {
+            clientOpId: (data as any).clientOpId,
+            messageId: existing.messageId,
+            emoji: existing.emoji,
+            userId: existing.userId,
+            reactionId: existing.id,
+            conversationId: data.conversationId,
+            noop: true,
+          });
+        }
+        return;
+      }
+    }
     console.error('Error handling add direct reaction:', error);
     socket.emit('error', {
       message:
@@ -579,10 +666,11 @@ export const handleRemoveDirectReaction = async (
     if (!socket.data.user) {
       throw new Error('User not authenticated');
     }
+    const currentUserId = socket.data.user.id;
 
     // Validate conversation participation
     const isParticipant = await validateConversationParticipation(
-      socket.data.user.id,
+      currentUserId,
       data.conversationId
     );
     if (!isParticipant) {
@@ -606,7 +694,7 @@ export const handleRemoveDirectReaction = async (
     await prisma.reaction.deleteMany({
       where: {
         messageId: data.messageId,
-        userId: socket.data.user.id,
+        userId: currentUserId,
         emoji: data.emoji,
       },
     });
@@ -615,7 +703,7 @@ export const handleRemoveDirectReaction = async (
     socket.to(data.conversationId).emit('direct_reaction_removed', {
       messageId: data.messageId,
       emoji: data.emoji,
-      userId: socket.data.user.id,
+      userId: currentUserId,
     });
 
     if ((data as any).clientOpId) {
@@ -623,11 +711,25 @@ export const handleRemoveDirectReaction = async (
         clientOpId: (data as any).clientOpId,
         messageId: data.messageId,
         emoji: data.emoji,
-        userId: socket.data.user.id,
+        userId: currentUserId,
         conversationId: data.conversationId,
       });
     }
   } catch (error) {
+    const code = (error as any)?.code;
+    const msg = error instanceof Error ? error.message.toLowerCase() : '';
+    const currentUserId = socket.data.user?.id;
+    if ((code === 'P2025' || msg.includes('reaction not found')) && (data as any).clientOpId) {
+      socket.emit('direct_reaction_removed_ack', {
+        clientOpId: (data as any).clientOpId,
+        messageId: data.messageId,
+        emoji: data.emoji,
+        userId: currentUserId || '',
+        conversationId: data.conversationId,
+        noop: true,
+      });
+      return;
+    }
     console.error('Error handling remove direct reaction:', error);
     socket.emit('error', {
       message:
