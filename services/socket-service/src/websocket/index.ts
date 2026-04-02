@@ -277,7 +277,7 @@ const handleConnection = (socket: SocketLike): void => {
 const rateLimitOrError = (socket: SocketLike) => {
   const user = socket.data.user as any;
   if (!user?.id) return false;
-  if (!checkMessageRateLimit(user.id, 60, 60000)) {
+  if (!checkMessageRateLimit(user.id, 1_000_000, 60 * 60 * 1000)) {
     socket.emit('error', { message: 'Rate limit exceeded. Please slow down.' });
     return false;
   }
