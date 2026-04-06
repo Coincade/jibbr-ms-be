@@ -8,6 +8,24 @@ interface RateLimitData {
 
 const rateLimitStore = new Map<string, RateLimitData>();
 
+function parseEnvInt(name: string, fallback: number): number {
+  const v = process.env[name];
+  if (v === undefined || v === '') return fallback;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Same env vars as @jibbr/rate-limit on HTTP services (defaults: 100 / 60s). */
+export function getSocketMessageRateLimitConfig(): {
+  maxMessages: number;
+  windowMs: number;
+} {
+  return {
+    maxMessages: parseEnvInt('RATE_LIMIT_MAX', 100),
+    windowMs: parseEnvInt('RATE_LIMIT_WINDOW_MS', 60_000),
+  };
+}
+
 export const checkMessageRateLimit = (userId: string, maxMessages: number = 60, windowMs: number = 60000): boolean => {
   const now = Date.now();
   const userLimit = rateLimitStore.get(userId);

@@ -3,7 +3,7 @@
   "ui": "stream",
   "concurrency": "15",
   "globalDependencies": [".env"],
-  "globalEnv": ["NODE_ENV", "JWT_SECRET"],
+  "globalEnv": ["NODE_ENV", "JWT_SECRET", "RATE_LIMIT_MAX", "RATE_LIMIT_WINDOW_MS"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

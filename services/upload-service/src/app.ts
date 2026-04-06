@@ -2,9 +2,12 @@ import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 
 import uploadRoutes from './routes/upload.route.js';
+import { createJwtOrIpRateLimiter } from '@jibbr/rate-limit';
 
 export const createUploadApp = (): Application => {
   const app: Application = express();
+
+  app.set('trust proxy', 1);
 
   app.use(cors());
   app.use(express.json());
@@ -19,6 +22,8 @@ export const createUploadApp = (): Application => {
       timestamp: new Date().toISOString(),
     });
   });
+
+  app.use(createJwtOrIpRateLimiter());
 
   app.use('/api/upload', uploadRoutes);
 

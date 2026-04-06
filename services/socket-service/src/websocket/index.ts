@@ -1,6 +1,9 @@
 import { Server } from 'http';
 import prisma from '../config/database.js';
-import { checkMessageRateLimit } from '../services/rate-limiter.js';
+import {
+  checkMessageRateLimit,
+  getSocketMessageRateLimitConfig,
+} from '../services/rate-limiter.js';
 import {
   removeClientFromAllChannels,
   addClientToChannel,
@@ -277,7 +280,8 @@ const handleConnection = (socket: SocketLike): void => {
 const rateLimitOrError = (socket: SocketLike) => {
   const user = socket.data.user as any;
   if (!user?.id) return false;
-  if (!checkMessageRateLimit(user.id, 1_000_000, 60 * 60 * 1000)) {
+  const { maxMessages, windowMs } = getSocketMessageRateLimitConfig();
+  if (!checkMessageRateLimit(user.id, maxMessages, windowMs)) {
     socket.emit('error', { message: 'Rate limit exceeded. Please slow down.' });
     return false;
   }
