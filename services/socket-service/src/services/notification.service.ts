@@ -19,6 +19,14 @@ export interface NotificationData {
 }
 
 export class NotificationService {
+  private static async getMutedUserIdsForChannel(channelId: string): Promise<Set<string>> {
+    const rows = await prisma.userChannelMute.findMany({
+      where: { channelId },
+      select: { userId: true },
+    });
+    return new Set(rows.map((r) => r.userId));
+  }
+
   private static sanitizeMessagePreview(messageContent?: string | null) {
     if (!messageContent) {
       return 'Sent an attachment';
@@ -165,8 +173,12 @@ export class NotificationService {
       const preview =
         NotificationService.sanitizeMessagePreview(messageContent);
 
+      const mutedUserIds = await NotificationService.getMutedUserIdsForChannel(channelId);
+
       for (const member of channelMembers) {
         await this.incrementChannelUnreadCount(channelId, member.userId);
+
+        if (mutedUserIds.has(member.userId)) continue;
 
         const prefs: NotificationPrefsRaw | null = member.user.notificationPreferences
           ? {

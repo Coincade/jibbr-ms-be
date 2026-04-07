@@ -53,6 +53,7 @@ model User {
   workspaces               Workspace[]
   channelInvites           ChannelInvite[]
   userRecents              UserRecent[]
+  mutedChannels            UserChannelMute[]
 }
 
 model ChannelInvite {
@@ -114,6 +115,20 @@ model Channel {
   invites           ChannelInvite[]
   forwardedMessages ForwardedMessage[]
   messages          Message[]
+  mutedByUsers      UserChannelMute[]
+}
+
+model UserChannelMute {
+  id        String   @id @default(cuid())
+  userId    String
+  channelId String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+  @@index([userId])
+  @@index([channelId])
 }
 
 model Conversation {

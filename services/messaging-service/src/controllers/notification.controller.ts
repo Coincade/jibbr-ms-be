@@ -67,6 +67,15 @@ const unregisterPushTokenSchema = z.object({
   pushToken: z.string().min(1, "Push token is required"),
 });
 
+const channelMutesQuerySchema = z.object({
+  workspaceId: z.string().min(1),
+});
+
+const setChannelMuteBodySchema = z.object({
+  channelId: z.string().min(1),
+  muted: z.boolean(),
+});
+
 // Mark messages as read for a channel or conversation
 export const markAsRead = async (req: Request, res: Response) => {
   try {
@@ -552,7 +561,119 @@ export const updateNotificationPreferences = async (req: Request, res: Response)
     console.error("Error in updateNotificationPreferences:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
-}; 
+};
+
+/** List channel IDs the current user has muted (for a workspace). Used by desktop + mobile. */
+export const getChannelMutes = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const query = channelMutesQuerySchema.parse(req.query);
+
+    const workspaceMember = await prisma.member.findFirst({
+      where: {
+        workspaceId: query.workspaceId,
+        userId: user.id,
+        isActive: true,
+      },
+    });
+    if (!workspaceMember) {
+      return res.status(403).json({ message: "You are not a member of this workspace" });
+    }
+
+    const mutes = await prisma.userChannelMute.findMany({
+      where: {
+        userId: user.id,
+        channel: {
+          workspaceId: query.workspaceId,
+          deletedAt: null,
+        },
+      },
+      select: { channelId: true },
+    });
+
+    return res.status(200).json({
+      message: "Channel mutes fetched successfully",
+      data: { channelIds: mutes.map((m) => m.channelId) },
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const errors = formatError(error);
+      return res.status(422).json({ message: "Invalid data", errors });
+    }
+    console.error("Error in getChannelMutes:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/** Mute or unmute a channel for the current user (synced across devices). */
+export const setChannelMute = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const body = setChannelMuteBodySchema.parse(req.body);
+
+    const channelMember = await prisma.channelMember.findUnique({
+      where: {
+        channelId_userId: {
+          channelId: body.channelId,
+          userId: user.id,
+        },
+      },
+      include: {
+        channel: { select: { deletedAt: true } },
+      },
+    });
+
+    if (!channelMember || !channelMember.isActive) {
+      return res.status(403).json({ message: "You are not a member of this channel" });
+    }
+    if (channelMember.channel.deletedAt) {
+      return res.status(404).json({ message: "Channel not found" });
+    }
+
+    if (body.muted) {
+      await prisma.userChannelMute.upsert({
+        where: {
+          userId_channelId: {
+            userId: user.id,
+            channelId: body.channelId,
+          },
+        },
+        create: {
+          userId: user.id,
+          channelId: body.channelId,
+        },
+        update: {},
+      });
+    } else {
+      await prisma.userChannelMute.deleteMany({
+        where: {
+          userId: user.id,
+          channelId: body.channelId,
+        },
+      });
+    }
+
+    return res.status(200).json({
+      message: body.muted ? "Channel muted successfully" : "Channel unmuted successfully",
+      data: { channelId: body.channelId, muted: body.muted },
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const errors = formatError(error);
+      return res.status(422).json({ message: "Invalid data", errors });
+    }
+    console.error("Error in setChannelMute:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
 
 // Register push notification token for mobile devices
 export const registerPushToken = async (req: Request, res: Response) => {

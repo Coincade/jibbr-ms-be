@@ -187,7 +187,18 @@ export async function createMentionsAndNotifications(
     },
   });
 
+  let mutedUserIds = new Set<string>();
+  if (channelId) {
+    const muteRows = await prisma.userChannelMute.findMany({
+      where: { channelId },
+      select: { userId: true },
+    });
+    mutedUserIds = new Set(muteRows.map((r: { userId: string }) => r.userId));
+  }
+
   for (const user of usersWithPrefs) {
+    if (channelId && mutedUserIds.has(user.id)) continue;
+
     const prefs: NotificationPrefsRaw | null = user.notificationPreferences
       ? { ...user.notificationPreferences, timezone: user.timezone ?? undefined }
       : null;
