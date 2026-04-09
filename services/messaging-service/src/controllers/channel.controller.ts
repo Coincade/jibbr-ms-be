@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import prisma from "../config/database.js";
-import { formatError } from "../helper.js";
+import { formatError, canUserSendAttachmentsToChannel } from "../helper.js";
 import { ZodError } from "zod";
 import { z } from "zod";
 
@@ -170,9 +170,10 @@ export const getChannel = async (req: Request, res: Response) => {
     const userChannelMembership = channel.members.find((m: { userId: string }) => m.userId === user.id);
     if (userChannelMembership) {
       // User is channel member - allow access (handles both workspace and bridge channel external members)
+      const canSendAttachments = await canUserSendAttachmentsToChannel(channel.id, user.id);
       return res.status(200).json({
         message: "Channel fetched successfully",
-        data: channel
+        data: { ...channel, canSendAttachments },
       });
     }
 
@@ -193,9 +194,10 @@ export const getChannel = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
+    const canSendAttachments = await canUserSendAttachmentsToChannel(channel.id, user.id);
     return res.status(200).json({
       message: "Channel fetched successfully",
-      data: channel
+      data: { ...channel, canSendAttachments },
     });
   } catch (error) {
     if (error instanceof ZodError) {

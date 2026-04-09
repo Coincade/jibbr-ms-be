@@ -322,16 +322,18 @@ export const handleSendDirectMessage = async (
       }
     })();
   } catch (error) {
+    const rawClientMessageId = (data as { clientMessageId?: string })?.clientMessageId;
+    const rawConversationId = data.conversationId ?? undefined;
+    const errorPayload = {
+      message: error instanceof ZodError ? 'Invalid message data' : error instanceof Error ? error.message : 'Failed to send direct message',
+      ...(rawClientMessageId ? { clientMessageId: rawClientMessageId } : {}),
+      ...(rawConversationId ? { conversationId: rawConversationId } : {}),
+    };
     if (error instanceof ZodError) {
-      socket.emit('error', { message: 'Invalid message data' });
+      socket.emit('error', errorPayload);
     } else {
       console.error('Error handling send direct message:', error);
-      socket.emit('error', {
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to send direct message',
-      });
+      socket.emit('error', errorPayload);
     }
   }
 };

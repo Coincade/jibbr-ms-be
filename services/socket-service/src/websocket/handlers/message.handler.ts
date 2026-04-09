@@ -353,11 +353,18 @@ export const handleSendMessage = async (
     })();
 
   } catch (error) {
+    const rawClientMessageId = (data as { clientMessageId?: string })?.clientMessageId;
+    const rawChannelId = data.channelId ?? undefined;
+    const errorPayload = {
+      message: error instanceof ZodError ? 'Invalid message data' : error instanceof Error ? error.message : 'Failed to send message',
+      ...(rawClientMessageId ? { clientMessageId: rawClientMessageId } : {}),
+      ...(rawChannelId ? { channelId: rawChannelId } : {}),
+    };
     if (error instanceof ZodError) {
-      socket.emit('error', { message: 'Invalid message data' });
+      socket.emit('error', errorPayload);
     } else {
       console.error('Error handling send message:', error);
-      socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to send message' });
+      socket.emit('error', errorPayload);
     }
   }
 };
