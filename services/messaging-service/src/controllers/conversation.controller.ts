@@ -1,4 +1,10 @@
-import { formatError, isFileAttachmentsEnabledForConversation, canUserSendAttachmentsToConversation } from "../helper.js";
+import {
+  formatError,
+  isFileAttachmentsEnabledForConversation,
+  canUserSendAttachmentsToConversation,
+  canUserForwardInTownhall,
+  isTownhallChannelName,
+} from "../helper.js";
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
@@ -576,7 +582,7 @@ export const forwardToDirectMessage = async (req: Request, res: Response) => {
     const originalMessage = await prisma.message.findUnique({
       where: { id: payload.messageId },
       include: {
-        channel: { select: { id: true, name: true } },
+        channel: { select: { id: true, name: true, workspaceId: true } },
         conversation: { select: { id: true } },
         user: { select: { id: true, name: true, image: true } },
         attachments: true,
@@ -612,6 +618,15 @@ export const forwardToDirectMessage = async (req: Request, res: Response) => {
       });
       if (!origParticipant) {
         return res.status(403).json({ message: "You do not have access to the original message" });
+      }
+    }
+
+    if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+      const allowed = await canUserForwardInTownhall(originalMessage.channel.workspaceId, user.id);
+      if (!allowed) {
+        return res.status(403).json({
+          message: "Only admins and moderators can forward messages in #Townhall",
+        });
       }
     }
 

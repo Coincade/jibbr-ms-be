@@ -3,7 +3,11 @@ import { validateChannelMembership, validateConversationParticipation, getUserIn
 import { sendMessageSchema, updateMessageSchema } from '../../validation/message.validations.js';
 import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
-import { canUserSendAttachmentsToChannel } from '../../helper.js';
+import {
+  canUserSendAttachmentsToChannel,
+  canUserForwardInTownhall,
+  isTownhallChannelName,
+} from '../../helper.js';
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from '../../services/mention.service.js'; // [mentions]
 import { htmlToCleanText } from '../../libs/htmlToCleanText.js';
 
@@ -129,6 +133,15 @@ export const handleSendMessage = async (
     if (payload.forwardedFromMessageId) {
       const originalMessage = await prisma.message.findUnique({
         where: { id: payload.forwardedFromMessageId },
+        include: {
+          channel: {
+            select: {
+              id: true,
+              name: true,
+              workspaceId: true,
+            },
+          },
+        },
       });
       if (!originalMessage || originalMessage.deletedAt) {
         throw new Error('Original message not found or has been deleted');
@@ -142,6 +155,29 @@ export const handleSendMessage = async (
         const isSourceParticipant = await validateConversationParticipation(socket.data.user.id, originalMessage.conversationId);
         if (!isSourceParticipant) {
           throw new Error('You do not have access to the original message');
+        }
+      }
+
+      const targetChannel = await prisma.channel.findFirst({
+        where: { id: payload.channelId, deletedAt: null },
+        select: { id: true, name: true, workspaceId: true },
+      });
+      if (!targetChannel) {
+        throw new Error('Target channel not found');
+      }
+
+      const townhallWorkspaceIds = new Set<string>();
+      if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+        townhallWorkspaceIds.add(originalMessage.channel.workspaceId);
+      }
+      if (isTownhallChannelName(targetChannel.name)) {
+        townhallWorkspaceIds.add(targetChannel.workspaceId);
+      }
+
+      for (const workspaceId of townhallWorkspaceIds) {
+        const allowed = await canUserForwardInTownhall(workspaceId, socket.data.user.id);
+        if (!allowed) {
+          throw new Error('Only admins and moderators can forward messages in #Townhall');
         }
       }
     }
@@ -598,7 +634,7 @@ export const handleForwardMessage = async (
     const originalMessage = await prisma.message.findUnique({
       where: { id: data.messageId },
       include: {
-        channel: { select: { id: true, name: true } },
+        channel: { select: { id: true, name: true, workspaceId: true } },
         conversation: { select: { id: true } },
         user: { select: { id: true, name: true, image: true } },
         attachments: true,
@@ -633,6 +669,29 @@ export const handleForwardMessage = async (
     const isTargetMember = await validateChannelMembership(socket.data.user.id, data.targetChannelId);
     if (!isTargetMember) {
       throw new Error('You are not a member of the target channel');
+    }
+
+    const targetChannel = await prisma.channel.findFirst({
+      where: { id: data.targetChannelId, deletedAt: null },
+      select: { id: true, name: true, workspaceId: true },
+    });
+    if (!targetChannel) {
+      throw new Error('Target channel not found');
+    }
+
+    const townhallWorkspaceIds = new Set<string>();
+    if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+      townhallWorkspaceIds.add(originalMessage.channel.workspaceId);
+    }
+    if (isTownhallChannelName(targetChannel.name)) {
+      townhallWorkspaceIds.add(targetChannel.workspaceId);
+    }
+
+    for (const workspaceId of townhallWorkspaceIds) {
+      const allowed = await canUserForwardInTownhall(workspaceId, socket.data.user.id);
+      if (!allowed) {
+        throw new Error('Only admins and moderators can forward messages in #Townhall');
+      }
     }
 
     const sourceName = originalMessage.channel?.name ?? 'Direct Message';

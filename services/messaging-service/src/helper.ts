@@ -170,3 +170,20 @@ export const canUserSendAttachmentsToConversation = async (conversationId: strin
         return true;
     }
 }
+
+export const isTownhallChannelName = (name?: string | null): boolean => {
+    return (name ?? '').trim().toLowerCase() === 'townhall';
+}
+
+export const canUserForwardInTownhall = async (workspaceId: string, userId: string): Promise<boolean> => {
+    try {
+        const member = await prisma.member.findFirst({
+            where: { workspaceId, userId, isActive: true },
+            select: { role: true },
+        });
+        return member?.role === 'ADMIN' || member?.role === 'MODERATOR';
+    } catch (error) {
+        console.error('Error checking canUserForwardInTownhall:', error);
+        return false;
+    }
+}

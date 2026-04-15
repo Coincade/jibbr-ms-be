@@ -1,4 +1,9 @@
-import { formatError, canUserSendAttachmentsToChannel } from "../helper.js";
+import {
+  formatError,
+  canUserSendAttachmentsToChannel,
+  canUserForwardInTownhall,
+  isTownhallChannelName,
+} from "../helper.js";
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
@@ -918,7 +923,7 @@ export const forwardMessage = async (req: Request, res: Response) => {
     const originalMessage = await prisma.message.findUnique({
       where: { id: payload.messageId },
       include: {
-        channel: { select: { id: true, name: true } },
+        channel: { select: { id: true, name: true, workspaceId: true } },
         conversation: { select: { id: true } },
         user: {
           select: {
@@ -975,6 +980,38 @@ export const forwardMessage = async (req: Request, res: Response) => {
     });
     if (!targetChannelMember) {
       return res.status(403).json({ message: "You are not a member of the target channel" });
+    }
+
+    const targetChannel = await prisma.channel.findFirst({
+      where: {
+        id: payload.channelId,
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        name: true,
+        workspaceId: true,
+      },
+    });
+    if (!targetChannel) {
+      return res.status(404).json({ message: "Target channel not found" });
+    }
+
+    const townhallWorkspaceIds = new Set<string>();
+    if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+      townhallWorkspaceIds.add(originalMessage.channel.workspaceId);
+    }
+    if (isTownhallChannelName(targetChannel.name)) {
+      townhallWorkspaceIds.add(targetChannel.workspaceId);
+    }
+
+    for (const workspaceId of townhallWorkspaceIds) {
+      const allowed = await canUserForwardInTownhall(workspaceId, user.id);
+      if (!allowed) {
+        return res.status(403).json({
+          message: "Only admins and moderators can forward messages in #Townhall",
+        });
+      }
     }
 
     const sourceName = originalMessage.channel?.name ?? "Direct Message";
