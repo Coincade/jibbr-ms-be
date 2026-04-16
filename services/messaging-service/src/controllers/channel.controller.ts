@@ -4,6 +4,7 @@ import prisma from "../config/database.js";
 import { formatError, canUserSendAttachmentsToChannel } from "../helper.js";
 import { ZodError } from "zod";
 import { z } from "zod";
+import { publishChannelEvent } from "../services/streams-publisher.service.js";
 
 const createChannelSchema = z.object({
   name: z.string().min(1),
@@ -64,6 +65,10 @@ export const createChannel = async (req: Request, res: Response) => {
         }
       }
     });
+
+    publishChannelEvent('channel.created', channel).catch((err) =>
+      console.error('[Streams] Failed to publish channel.created event:', err)
+    );
 
     return res.status(201).json({
       message: "Channel created successfully",
@@ -623,6 +628,10 @@ export const updateChannel = async (req: Request, res: Response) => {
       }
     });
 
+    publishChannelEvent('channel.updated', updatedChannel).catch((err) =>
+      console.error('[Streams] Failed to publish channel.updated event:', err)
+    );
+
     return res.status(200).json({
       message: "Channel updated successfully",
       data: updatedChannel
@@ -683,7 +692,7 @@ export const softDeleteChannel = async (req: Request, res: Response) => {
     }
 
     // Soft delete the channel by setting deletedAt timestamp
-    await prisma.channel.update({
+    const deletedChannel = await prisma.channel.update({
       where: {
         id: channelId
       },
@@ -691,6 +700,10 @@ export const softDeleteChannel = async (req: Request, res: Response) => {
         deletedAt: new Date()
       }
     });
+
+    publishChannelEvent('channel.deleted', deletedChannel).catch((err) =>
+      console.error('[Streams] Failed to publish channel.deleted event:', err)
+    );
 
     return res.status(200).json({
       message: "Channel soft deleted successfully. All messages and reactions are preserved."
@@ -866,6 +879,10 @@ export const createBridgeChannel = async (req: Request, res: Response) => {
         }
       }
     });
+
+    publishChannelEvent('channel.created', channel).catch((err) =>
+      console.error('[Streams] Failed to publish channel.created event:', err)
+    );
 
     return res.status(201).json({ message: "Bridge channel created successfully", data: channel });
   } catch (error) {

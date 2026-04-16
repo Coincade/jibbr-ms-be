@@ -144,3 +144,82 @@ export async function publishUserStatusChangedEvent(
     console.error('[Streams] Failed to publish user.status_changed event:', error);
   }
 }
+
+export async function publishWorkspaceEvent(
+  type: 'workspace.created' | 'workspace.updated' | 'workspace.deleted',
+  workspace: any
+) {
+  try {
+    const event: StreamEvent = {
+      eventId: randomUUID(),
+      type,
+      data: {
+        id: workspace.id,
+        name: workspace.name,
+        joinCode: workspace.joinCode,
+        userId: workspace.userId,
+        type: workspace.type ?? null,
+        description: workspace.description ?? null,
+        imageUrl: workspace.imageUrl ?? null,
+        fileAttachmentsEnabled: workspace.fileAttachmentsEnabled ?? null,
+        isActive: workspace.isActive ?? true,
+        deletedAt:
+          workspace.deletedAt instanceof Date
+            ? workspace.deletedAt.toISOString()
+            : workspace.deletedAt ?? null,
+        updatedAt:
+          workspace.updatedAt instanceof Date
+            ? workspace.updatedAt.toISOString()
+            : workspace.updatedAt ?? null,
+      },
+      timestamp: new Date().toISOString(),
+      source: 'messaging-service',
+    };
+
+    await publishEvent(STREAMS.WORKSPACE_EVENTS, event);
+    console.log(`[Streams] Published ${type} event:`, workspace.id);
+  } catch (error) {
+    console.error(`[Streams] Failed to publish ${type} event:`, error);
+  }
+}
+
+export async function publishChannelEvent(
+  type: 'channel.created' | 'channel.updated' | 'channel.deleted',
+  channel: any
+) {
+  try {
+    const event: StreamEvent = {
+      eventId: randomUUID(),
+      type,
+      data: {
+        id: channel.id,
+        name: channel.name,
+        typeValue: channel.type ?? null,
+        type: channel.type ?? null,
+        workspaceId: channel.workspaceId,
+        image: channel.image ?? null,
+        channelAdminId: channel.channelAdminId ?? null,
+        isBridgeChannel: channel.isBridgeChannel ?? false,
+        deletedAt:
+          channel.deletedAt instanceof Date
+            ? channel.deletedAt.toISOString()
+            : channel.deletedAt ?? null,
+        createdAt:
+          channel.createdAt instanceof Date
+            ? channel.createdAt.toISOString()
+            : channel.createdAt ?? null,
+        updatedAt:
+          channel.updatedAt instanceof Date
+            ? channel.updatedAt.toISOString()
+            : channel.updatedAt ?? null,
+      },
+      timestamp: new Date().toISOString(),
+      source: 'messaging-service',
+    };
+
+    await publishEvent(STREAMS.CHANNEL_EVENTS, event);
+    console.log(`[Streams] Published ${type} event:`, channel.id);
+  } catch (error) {
+    console.error(`[Streams] Failed to publish ${type} event:`, error);
+  }
+}

@@ -431,15 +431,31 @@ async function handleChannelEvent(event: StreamEvent) {
         });
         console.log(`[Streams] Broadcasted channel.updated to channel: ${data.id}`);
       }
+      if (data.workspaceId) {
+        ioInstance.to(`workspace:${data.workspaceId}`).emit('channel_updated', {
+          channel: data,
+          timestamp: event.timestamp,
+        });
+        console.log(`[Streams] Broadcasted channel.updated to workspace: ${data.workspaceId}`);
+      }
       break;
 
     case 'channel.deleted':
       if (data.id) {
         ioInstance.to(String(data.id)).emit('channel_deleted', {
           channelId: data.id,
+          workspaceId: data.workspaceId,
           timestamp: event.timestamp,
         });
         console.log(`[Streams] Broadcasted channel.deleted to channel: ${data.id}`);
+      }
+      if (data.workspaceId) {
+        ioInstance.to(`workspace:${data.workspaceId}`).emit('channel_deleted', {
+          channelId: data.id,
+          workspaceId: data.workspaceId,
+          timestamp: event.timestamp,
+        });
+        console.log(`[Streams] Broadcasted channel.deleted to workspace: ${data.workspaceId}`);
       }
       break;
 

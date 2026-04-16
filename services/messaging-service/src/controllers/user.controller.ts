@@ -170,6 +170,81 @@ export const updateMyStatus = async (req: Request, res: Response) => {
 };
 
 /**
+ * Get a user's public profile
+ * GET /api/users/:userId/profile
+ */
+export const getUserProfile = async (req: Request, res: Response) => {
+  try {
+    const requester = req.user;
+    if (!requester) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const { userId } = req.params;
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        timezone: true,
+        phone: true,
+        employeeId: true,
+        birthday: true,
+        designation: true,
+      },
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (requester.id !== userId) {
+      const sharedWorkspaceMember = await prisma.member.findFirst({
+        where: {
+          userId: requester.id,
+          isActive: true,
+          workspace: {
+            deletedAt: null,
+            members: {
+              some: {
+                userId,
+                isActive: true,
+              },
+            },
+          },
+        },
+        select: { id: true },
+      });
+
+      if (!sharedWorkspaceMember) {
+        return res.status(403).json({ message: "You do not have access to this profile" });
+      }
+    }
+
+    return res.status(200).json({
+      message: "User profile fetched successfully",
+      data: {
+        id: targetUser.id,
+        name: targetUser.name ?? null,
+        email: targetUser.email,
+        image: targetUser.image ?? null,
+        timezone: targetUser.timezone ?? null,
+        phone: targetUser.phone ?? null,
+        employeeId: targetUser.employeeId ?? null,
+        birthday: targetUser.birthday ? targetUser.birthday.toISOString() : null,
+        designation: targetUser.designation ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("[user profile] getUserProfile error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
  * Get a user's presence status
  * GET /api/users/:userId/status
  */

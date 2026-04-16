@@ -6,6 +6,7 @@ import generateCode from "../helpers/generateCode.js";
 import { getEmailDomain } from "../helpers/domainUtils.js";
 import { createWorkspaceSchema, joinWorkspaceSchema, joinWorkspaceByCodeSchema } from "../validation/workspace.validations.js";
 import { ZodError } from "zod";
+import { publishWorkspaceEvent } from "../services/streams-publisher.service.js";
 
 
 export const createWorkspace = async (req: Request, res: Response) => {
@@ -49,6 +50,10 @@ export const createWorkspace = async (req: Request, res: Response) => {
         userId: user.id,
       },
     });
+
+    publishWorkspaceEvent('workspace.created', workspace).catch((err) =>
+      console.error('[Streams] Failed to publish workspace.created event:', err)
+    );
 
     await prisma.member.create({
       data: {
@@ -576,6 +581,10 @@ export const updateWorkspace = async (req: Request, res: Response) => {
       data: updateData,
     });
 
+    publishWorkspaceEvent('workspace.updated', workspace).catch((err) =>
+      console.error('[Streams] Failed to publish workspace.updated event:', err)
+    );
+
     return res.status(200).json({
       message: "Workspace updated successfully",
       data: workspace,
@@ -626,7 +635,7 @@ export const softDeleteWorkspace = async (req: Request, res: Response) => {
     }
 
     // Soft delete the workspace by setting deletedAt timestamp
-    await prisma.workspace.update({
+    const deletedWorkspace = await prisma.workspace.update({
       where: {
         id: workspaceId,
       },
@@ -634,6 +643,10 @@ export const softDeleteWorkspace = async (req: Request, res: Response) => {
         deletedAt: new Date()
       },
     });   
+
+    publishWorkspaceEvent('workspace.deleted', deletedWorkspace).catch((err) =>
+      console.error('[Streams] Failed to publish workspace.deleted event:', err)
+    );
 
     return res.status(200).json({ 
       message: "Workspace soft deleted successfully. All data is preserved." 

@@ -105,6 +105,8 @@ export const sendToUser = (io: any, userId: string, event: string, data: any): v
   io.to(`user_${userId}`).emit(event, data);
 };
 
+export const getWorkspaceRoomKey = (workspaceId: string): string => `workspace:${workspaceId}`;
+
 /**
  * Validate channel membership
  */
@@ -145,6 +147,25 @@ export const validateConversationParticipation = async (userId: string, conversa
     return !!participant;
   } catch (error) {
     console.error('Error validating conversation participation:', error);
+    return false;
+  }
+};
+
+export const validateWorkspaceMembership = async (userId: string, workspaceId: string): Promise<boolean> => {
+  try {
+    const { default: prisma } = await import('../config/database.js');
+
+    const member = await prisma.member.findFirst({
+      where: {
+        workspaceId,
+        userId,
+        isActive: true,
+      },
+    });
+
+    return !!member;
+  } catch (error) {
+    console.error('Error validating workspace membership:', error);
     return false;
   }
 };

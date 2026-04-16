@@ -11,6 +11,8 @@ import {
   addClientToConversation,
   validateChannelMembership,
   validateConversationParticipation,
+  validateWorkspaceMembership,
+  getWorkspaceRoomKey,
 } from './utils.js';
 import {
   handleSendMessage,
@@ -151,6 +153,7 @@ const handleConnection = (socket: SocketLike): void => {
   // Populated on join_* events after validation.
   (socket.data as any).allowedChannels = new Set<string>();
   (socket.data as any).allowedConversations = new Set<string>();
+  (socket.data as any).allowedWorkspaces = new Set<string>();
 
   // Personal room for direct messaging + notifications
   socket.join(`user_${user.id}`);
@@ -211,6 +214,27 @@ const handleConnection = (socket: SocketLike): void => {
     (socket.data as any).allowedConversations?.add(conversationId);
     addClientToConversation(socket, conversationId, conversationClients);
     socket.emit('conversation_joined', { conversationId });
+  });
+
+  socket.on('join_workspace', async (data) => {
+    const { workspaceId } = data || {};
+    if (!workspaceId) return;
+    const isMember = await validateWorkspaceMembership(user.id, workspaceId);
+    if (!isMember) {
+      socket.emit('error', { message: 'You are not a member of this workspace' });
+      return;
+    }
+    (socket.data as any).allowedWorkspaces?.add(workspaceId);
+    socket.join(getWorkspaceRoomKey(workspaceId));
+    socket.emit('joined_workspace', { workspaceId });
+  });
+
+  socket.on('leave_workspace', (data) => {
+    const { workspaceId } = data || {};
+    if (!workspaceId) return;
+    (socket.data as any).allowedWorkspaces?.delete(workspaceId);
+    socket.leave(getWorkspaceRoomKey(workspaceId));
+    socket.emit('left_workspace', { workspaceId });
   });
 
   socket.on('leave_conversation', (data) => {
