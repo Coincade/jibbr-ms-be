@@ -1,6 +1,8 @@
 import request from 'supertest';
 import { createAuthApp } from '../app.js';
 
+// E2E tests run under Jest (`npm test` / `test:e2e`). Use Jest globals; do not import Vitest here.
+
 describe('auth-service e2e', () => {
   it('returns health information without requiring the database', async () => {
     const app = createAuthApp({
