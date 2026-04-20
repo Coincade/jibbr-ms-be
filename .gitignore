@@ -46,6 +46,7 @@ Thumbs.db
 
 # Prisma
 prisma/migrations/
+packages/database/dev-backup-2026-04-20-1402.sql
 
 # Docker
 docker-compose.override.yml
