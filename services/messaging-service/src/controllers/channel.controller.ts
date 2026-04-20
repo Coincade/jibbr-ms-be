@@ -10,7 +10,8 @@ const createChannelSchema = z.object({
   name: z.string().min(1),
   type: z.enum(["PUBLIC", "PRIVATE"]),
   workspaceId: z.string(),
-  image: z.string().optional()
+  image: z.string().optional(),
+  description: z.string().trim().max(2000).optional()
 });
 
 const joinChannelSchema = z.object({
@@ -25,8 +26,269 @@ const addMemberToChannelSchema = z.object({
 const updateChannelSchema = z.object({
   name: z.string().min(1).optional(),
   type: z.enum(["PUBLIC", "PRIVATE"]).optional(),
-  image: z.string().optional()
+  image: z.string().optional(),
+  description: z.string().trim().max(2000).optional()
 });
+
+const CHANNEL_ASSET_PREVIEW_LIMIT = 6;
+const linkRegex = /https?:\/\/[^\s<>"')]+/gi;
+
+function normalizeOptionalText(value?: string) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function isMediaMimeType(mimeType?: string | null) {
+  if (!mimeType) return false;
+  return mimeType.startsWith("image/") || mimeType.startsWith("video/");
+}
+
+function extractLinksFromText(content?: string | null) {
+  if (!content) return [];
+  const matches = content.match(linkRegex) ?? [];
+  return Array.from(new Set(matches));
+}
+
+async function buildChannelDetailPayload(channelId: string, userId: string) {
+  const channel = await prisma.channel.findFirst({
+    where: {
+      id: channelId,
+      deletedAt: null
+    },
+    include: {
+      workspace: true,
+      mutedByUsers: {
+        where: {
+          userId
+        },
+        select: {
+          id: true
+        }
+      },
+      _count: {
+        select: {
+          members: {
+            where: {
+              isActive: true
+            }
+          },
+          messages: {
+            where: {
+              deletedAt: null
+            }
+          }
+        }
+      },
+      members: {
+        where: {
+          isActive: true
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+              email: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: "asc"
+        }
+      }
+    }
+  });
+
+  if (!channel) {
+    return null;
+  }
+
+  const userChannelMembership = channel.members.find((m) => m.userId === userId);
+  if (!userChannelMembership) {
+    return { channel, isMember: false } as const;
+  }
+
+  const workspaceMembership = await prisma.member.findFirst({
+    where: {
+      userId,
+      workspaceId: channel.workspaceId,
+      isActive: true
+    },
+    select: {
+      role: true
+    }
+  });
+
+  const memberUserIds = channel.members.map((member) => member.userId);
+  const workspaceMembers = memberUserIds.length > 0
+    ? await prisma.member.findMany({
+        where: {
+          workspaceId: channel.workspaceId,
+          userId: {
+            in: memberUserIds
+          },
+          isActive: true
+        },
+        select: {
+          userId: true,
+          role: true
+        }
+      })
+    : [];
+
+  const roleByUserId = new Map(workspaceMembers.map((member) => [member.userId, member.role]));
+
+  const attachmentMessages = await prisma.message.findMany({
+    where: {
+      channelId: channel.id,
+      deletedAt: null,
+      attachments: {
+        some: {}
+      }
+    },
+    select: {
+      id: true,
+      content: true,
+      createdAt: true,
+      userId: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          image: true
+        }
+      },
+      attachments: {
+        select: {
+          id: true,
+          filename: true,
+          originalName: true,
+          mimeType: true,
+          size: true,
+          url: true,
+          createdAt: true
+        }
+      }
+    },
+    orderBy: {
+      createdAt: "desc"
+    },
+    take: 50
+  });
+
+  const linkMessages = await prisma.message.findMany({
+    where: {
+      channelId: channel.id,
+      deletedAt: null,
+      content: {
+        contains: "http"
+      }
+    },
+    select: {
+      id: true,
+      content: true,
+      createdAt: true,
+      userId: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          image: true
+        }
+      }
+    },
+    orderBy: {
+      createdAt: "desc"
+    },
+    take: 50
+  });
+
+  const media = attachmentMessages
+    .flatMap((message) =>
+      message.attachments
+        .filter((attachment) => isMediaMimeType(attachment.mimeType))
+        .map((attachment) => ({
+          id: attachment.id,
+          messageId: message.id,
+          url: attachment.url,
+          filename: attachment.originalName || attachment.filename,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+          createdAt: attachment.createdAt.toISOString(),
+          sender: message.user
+        }))
+    )
+    .slice(0, CHANNEL_ASSET_PREVIEW_LIMIT);
+
+  const files = attachmentMessages
+    .flatMap((message) =>
+      message.attachments
+        .filter((attachment) => !isMediaMimeType(attachment.mimeType))
+        .map((attachment) => ({
+          id: attachment.id,
+          messageId: message.id,
+          url: attachment.url,
+          filename: attachment.originalName || attachment.filename,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+          createdAt: attachment.createdAt.toISOString(),
+          sender: message.user
+        }))
+    )
+    .slice(0, CHANNEL_ASSET_PREVIEW_LIMIT);
+
+  const links = linkMessages
+    .flatMap((message) =>
+      extractLinksFromText(message.content).map((url) => ({
+        id: `${message.id}:${url}`,
+        messageId: message.id,
+        url,
+        createdAt: message.createdAt.toISOString(),
+        sender: message.user
+      }))
+    )
+    .slice(0, CHANNEL_ASSET_PREVIEW_LIMIT);
+
+  const canSendAttachments = await canUserSendAttachmentsToChannel(channel.id, userId);
+  const currentUserRole = workspaceMembership?.role ?? null;
+  const isChannelCreator = channel.channelAdminId === userId;
+  const isWorkspaceAdmin = currentUserRole === "ADMIN" || currentUserRole === "MODERATOR";
+  const isProtectedChannel = ["general", "townhall"].includes(channel.name.toLowerCase());
+  const canEdit = !isProtectedChannel && (isChannelCreator || isWorkspaceAdmin);
+  const canManageMembers = !isProtectedChannel && (isChannelCreator || isWorkspaceAdmin);
+  const canLeave = !isProtectedChannel && !isChannelCreator;
+
+  return {
+    channel,
+    isMember: true,
+    data: {
+      ...channel,
+      description: channel.description,
+      canSendAttachments,
+      isMuted: channel.mutedByUsers.length > 0,
+      memberCount: channel._count.members,
+      messageCount: channel._count.messages,
+      permissions: {
+        canEdit,
+        canManageMembers,
+        canLeave,
+        isChannelCreator,
+        currentUserRole
+      },
+      members: channel.members.map((member) => ({
+        ...member,
+        workspaceRole: roleByUserId.get(member.userId) ?? null,
+        isChannelCreator: member.userId === channel.channelAdminId
+      })),
+      preview: {
+        media,
+        files,
+        links
+      }
+    }
+  } as const;
+}
 
 export const createChannel = async (req: Request, res: Response) => {
   try {
@@ -54,6 +316,7 @@ export const createChannel = async (req: Request, res: Response) => {
     const channel = await prisma.channel.create({
       data: {
         name: payload.name,
+        description: normalizeOptionalText(payload.description),
         type: payload.type,
         workspaceId: payload.workspaceId,
         image: payload.image,
@@ -142,47 +405,13 @@ export const getChannel = async (req: Request, res: Response) => {
 
     const channelId = req.params.id;
 
-    const channel = await prisma.channel.findFirst({
-      where: {
-        id: channelId,
-        deletedAt: null
-      },
-      include: {
-        workspace: true,
-        members: {
-          where: {
-            isActive: true
-          },
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
-                email: true
-              }
-            }
-          }
-        }
-      }
-    });
+    const result = await buildChannelDetailPayload(channelId, user.id);
 
-    if (!channel) {
+    if (!result) {
       return res.status(404).json({ message: "Channel not found" });
     }
 
-    // Check if user is a member of the channel (for bridge channels, external users are channel members but not workspace members)
-    const userChannelMembership = channel.members.find((m: { userId: string }) => m.userId === user.id);
-    if (userChannelMembership) {
-      // User is channel member - allow access (handles both workspace and bridge channel external members)
-      const canSendAttachments = await canUserSendAttachmentsToChannel(channel.id, user.id);
-      return res.status(200).json({
-        message: "Channel fetched successfully",
-        data: { ...channel, canSendAttachments },
-      });
-    }
-
-    // For non-bridge channels, require workspace membership
+    const { channel } = result;
     const member = await prisma.member.findFirst({
       where: {
         userId: user.id,
@@ -194,15 +423,14 @@ export const getChannel = async (req: Request, res: Response) => {
     if (!member) {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
-    const channelMemberCheck = channel.members.find((m: { userId: string }) => m.userId === user.id);
-    if (!channelMemberCheck) {
+
+    if (!result.isMember) {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
-    const canSendAttachments = await canUserSendAttachmentsToChannel(channel.id, user.id);
     return res.status(200).json({
       message: "Channel fetched successfully",
-      data: { ...channel, canSendAttachments },
+      data: result.data,
     });
   } catch (error) {
     if (error instanceof ZodError) {
@@ -624,6 +852,7 @@ export const updateChannel = async (req: Request, res: Response) => {
         name: payload.name,
         type: payload.type,
         image: payload.image,
+        description: payload.description !== undefined ? normalizeOptionalText(payload.description) : undefined,
         updatedAt: new Date()
       }
     });

@@ -101,6 +101,8 @@ model Workspace {
 model Channel {
   id                String             @id @default(cuid())
   name              String
+  topic             String?            @db.VarChar(120)
+  description       String?
   type              ChannelType        @default(PUBLIC)
   isBridgeChannel   Boolean            @default(false)
   createdAt         DateTime           @default(now())
