@@ -14,6 +14,7 @@ import userRoutes from './routes/user.route.js';
 import notificationRoutes from './routes/notification.route.js';
 import recentsRoutes from './routes/recents.route.js';
 import searchRoutes from './routes/search.route.js';
+import workspaceCollaborationRoutes from './routes/workspace-collaboration.route.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,6 +34,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/recents', recentsRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/workspace-collaborations', workspaceCollaborationRoutes);
 const httpServer = createServer(app);
 const logger = new Logger('messaging-service');
 

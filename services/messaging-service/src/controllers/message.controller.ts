@@ -21,6 +21,7 @@ import {
   removeReactionSchema,
 } from "../validation/message.validations.js";
 import { ZodError } from "zod";
+import { canUserReadChannelHistory, canUserReadConversationHistory } from "../helpers/collaborationAccess.js";
 
 // Send a message (with optional attachments and reply)
 export const sendMessage = async (req: Request, res: Response) => {
@@ -315,16 +316,8 @@ export const getMessages = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Invalid before cursor" });
     }
 
-    // Check if user is member of the channel
-    const channelMember = await prisma.channelMember.findFirst({
-      where: {
-        channelId: payload.channelId,
-        userId: user.id,
-        isActive: true,
-      },
-    });
-
-    if (!channelMember) {
+    const canReadHistory = await canUserReadChannelHistory(payload.channelId, user.id);
+    if (!canReadHistory) {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
@@ -527,25 +520,13 @@ export const getMessage = async (req: Request, res: Response) => {
 
     // Check access: channel message → channel membership; DM (conversation) message → conversation participation
     if (message.channelId) {
-      const channelMember = await prisma.channelMember.findFirst({
-        where: {
-          channelId: message.channelId,
-          userId: user.id,
-          isActive: true,
-        },
-      });
-      if (!channelMember) {
+      const canReadHistory = await canUserReadChannelHistory(message.channelId, user.id);
+      if (!canReadHistory) {
         return res.status(403).json({ message: "You are not a member of this channel" });
       }
     } else if (message.conversationId) {
-      const participant = await prisma.conversationParticipant.findFirst({
-        where: {
-          conversationId: message.conversationId,
-          userId: user.id,
-          isActive: true,
-        },
-      });
-      if (!participant) {
+      const canReadHistory = await canUserReadConversationHistory(message.conversationId, user.id);
+      if (!canReadHistory) {
         return res.status(403).json({ message: "You are not a participant in this conversation" });
       }
     } else {
@@ -1110,16 +1091,8 @@ export const getForwardedMessages = async (req: Request, res: Response) => {
     const { channelId } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
-    // Check if user is member of the channel
-    const channelMember = await prisma.channelMember.findFirst({
-      where: {
-        channelId,
-        userId: user.id,
-        isActive: true,
-      },
-    });
-
-    if (!channelMember) {
+    const canReadHistory = await canUserReadChannelHistory(channelId, user.id);
+    if (!canReadHistory) {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
@@ -1198,68 +1171,126 @@ export const getMentions = async (req: Request, res: Response) => {
     const take = Math.min(Number(limit) || 20, 100);
 
     // Cursor-based pagination
-    let cursorWhere: any = {};
+    const buildCursorWhere = (createdAt?: Date | null, mentionId?: string | null) => {
+      if (!createdAt || !mentionId) return {};
+      return {
+        OR: [
+          {
+            createdAt: { lt: createdAt },
+          },
+          {
+            createdAt,
+            id: { lt: mentionId },
+          },
+        ],
+      };
+    };
+
+    let boundaryCreatedAt: Date | null = null;
+    let boundaryMentionId: string | null = null;
     if (cursor) {
       // Parse cursor: format is "createdAt:messageMentionId"
       const [createdAtStr, mentionId] = (cursor as string).split(':');
-      cursorWhere = {
-        OR: [
-          {
-            createdAt: { lt: new Date(createdAtStr) }
-          },
-          {
-            createdAt: new Date(createdAtStr),
-            id: { lt: mentionId }
-          }
-        ]
-      };
+      const parsedDate = new Date(createdAtStr);
+      if (!mentionId || Number.isNaN(parsedDate.getTime())) {
+        return res.status(400).json({ message: "Invalid cursor" });
+      }
+      boundaryCreatedAt = parsedDate;
+      boundaryMentionId = mentionId;
     }
 
-    // Get mentions for this user
-    const mentions = await prisma.messageMention.findMany({
-      where: {
-        userId: user.id,
-        ...cursorWhere
-      },
-      include: {
-        message: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
+    // Fetch mentions in chunks and keep only those still readable under collaboration revoke semantics.
+    const readableMentions: any[] = [];
+    const channelReadCache = new Map<string, boolean>();
+    const conversationReadCache = new Map<string, boolean>();
+    const chunkSize = Math.min(Math.max(take * 2, take + 1), 100);
+    let exhausted = false;
+    let loops = 0;
+    const maxLoops = 10;
+
+    while (readableMentions.length <= take && !exhausted && loops < maxLoops) {
+      loops += 1;
+
+      const mentionsChunk = await prisma.messageMention.findMany({
+        where: {
+          userId: user.id,
+          ...buildCursorWhere(boundaryCreatedAt, boundaryMentionId),
+        },
+        include: {
+          message: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  image: true,
+                },
               },
-            },
-            channel: {
-              select: {
-                id: true,
-                name: true,
+              channel: {
+                select: {
+                  id: true,
+                  name: true,
+                },
               },
-            },
-            attachments: true,
-            reactions: {
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
+              attachments: true,
+              reactions: {
+                include: {
+                  user: {
+                    select: {
+                      id: true,
+                      name: true,
+                    },
                   },
                 },
               },
             },
           },
         },
-      },
-      orderBy: [
-        { createdAt: 'desc' },
-        { id: 'desc' }
-      ],
-      take: take + 1, // Fetch one extra to determine if there's a next page
-    });
+        orderBy: [
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
+        take: chunkSize,
+      });
 
-    const hasNextPage = mentions.length > take;
-    const messages = hasNextPage ? mentions.slice(0, take) : mentions;
+      if (mentionsChunk.length === 0) {
+        exhausted = true;
+        break;
+      }
+
+      for (const mention of mentionsChunk) {
+        const msg = mention.message;
+        let canRead = false;
+
+        if (msg.channelId) {
+          if (!channelReadCache.has(msg.channelId)) {
+            channelReadCache.set(msg.channelId, await canUserReadChannelHistory(msg.channelId, user.id));
+          }
+          canRead = channelReadCache.get(msg.channelId) === true;
+        } else if (msg.conversationId) {
+          if (!conversationReadCache.has(msg.conversationId)) {
+            conversationReadCache.set(
+              msg.conversationId,
+              await canUserReadConversationHistory(msg.conversationId, user.id)
+            );
+          }
+          canRead = conversationReadCache.get(msg.conversationId) === true;
+        }
+
+        if (canRead) {
+          readableMentions.push(mention);
+          if (readableMentions.length > take) break;
+        }
+      }
+
+      const last = mentionsChunk[mentionsChunk.length - 1];
+      boundaryCreatedAt = last.createdAt;
+      boundaryMentionId = last.id;
+      if (mentionsChunk.length < chunkSize) exhausted = true;
+    }
+
+    const hasNextPage = readableMentions.length > take;
+    const messages = hasNextPage ? readableMentions.slice(0, take) : readableMentions;
 
     // Generate next cursor
     let nextCursor: string | null = null;

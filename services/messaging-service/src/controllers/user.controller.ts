@@ -28,8 +28,26 @@ const updateStatusSchema = z.object({
 const searchUsersSchema = z.object({
   workspaceId: z.string().optional(),
   channelId: z.string().min(1, "Channel ID is required"),
-  q: z.string().min(1, "Search query is required").max(50, "Query too long"),
+  q: z.string().max(50, "Query too long").optional(),
 });
+
+const searchCollaboratorsSchema = z.object({
+  workspaceId: z.string().min(1, "Workspace ID is required"),
+  q: z.string().max(50, "Query too long").optional(),
+  mode: z.enum(["discovery", "shared-channel", "dm"]).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  offset: z.coerce.number().int().min(0).max(500).optional(),
+});
+
+const isPolicyAllowedForSearchMode = (
+  policy: { allowExternalDiscovery: boolean; allowSharedChannels: boolean; allowCrossWorkspaceDm: boolean },
+  mode: "discovery" | "shared-channel" | "dm"
+) => {
+  if (!policy.allowExternalDiscovery) return false;
+  if (mode === "shared-channel") return policy.allowSharedChannels;
+  if (mode === "dm") return policy.allowCrossWorkspaceDm;
+  return true;
+};
 
 /**
  * Search users who can access a channel (prefix search)
@@ -93,7 +111,7 @@ export const searchUsers = async (req: Request, res: Response) => {
     });
 
     // Filter by prefix search (case-insensitive)
-    const searchLower = payload.q.toLowerCase();
+    const searchLower = payload.q?.trim().toLowerCase() ?? "";
     const matchingUsers = channelMembers
       .map((cm) => cm.user)
       .filter((u) => {
@@ -120,6 +138,152 @@ export const searchUsers = async (req: Request, res: Response) => {
       });
     }
     console.error("[mentions] User search error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Search users in current and linked workspaces.
+ * GET /api/users/search-collaborators?workspaceId=&q=&mode=
+ */
+export const searchCollaborators = async (req: Request, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(422).json({ message: "User not found" });
+    }
+
+    const payload = searchCollaboratorsSchema.parse({
+      workspaceId: req.query.workspaceId,
+      q: req.query.q,
+      mode: req.query.mode,
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    const searchMode = payload.mode ?? "discovery";
+    const pageLimit = payload.limit ?? 30;
+    const pageOffset = payload.offset ?? 0;
+
+    const requesterMember = await prisma.member.findFirst({
+      where: {
+        workspaceId: payload.workspaceId,
+        userId: user.id,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+
+    if (!requesterMember) {
+      return res.status(403).json({ message: "You are not a member of this workspace" });
+    }
+
+    const activeLinks = await prisma.workspaceCollaboration.findMany({
+      where: {
+        status: "ACTIVE",
+        OR: [{ workspaceAId: payload.workspaceId }, { workspaceBId: payload.workspaceId }],
+      },
+      include: {
+        policy: {
+          select: {
+            allowExternalDiscovery: true,
+            allowSharedChannels: true,
+            allowCrossWorkspaceDm: true,
+          },
+        },
+      },
+    });
+
+    const eligibleLinks = activeLinks.filter((link) => isPolicyAllowedForSearchMode(link.policy, searchMode));
+    const linkByCounterpartWorkspaceId = new Map<string, { id: string }>();
+    for (const link of eligibleLinks) {
+      const counterpartWorkspaceId =
+        link.workspaceAId === payload.workspaceId ? link.workspaceBId : link.workspaceAId;
+      linkByCounterpartWorkspaceId.set(counterpartWorkspaceId, { id: link.id });
+    }
+
+    const workspaceIds = [payload.workspaceId, ...Array.from(linkByCounterpartWorkspaceId.keys())];
+    const memberships = await prisma.member.findMany({
+      where: {
+        workspaceId: { in: workspaceIds },
+        isActive: true,
+      },
+      select: {
+        workspaceId: true,
+        userId: true,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            image: true,
+          },
+        },
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+      },
+      take: 200,
+    });
+
+    const q = payload.q?.trim().toLowerCase() ?? "";
+    const seen = new Set<string>();
+    const allMatches = memberships
+      .filter((membership) => membership.userId !== user.id)
+      .filter((membership) => {
+        if (!q) return true;
+        const name = membership.user.name?.toLowerCase() ?? "";
+        const email = membership.user.email.toLowerCase();
+        return name.includes(q) || email.includes(q);
+      })
+      .filter((membership) => {
+        const dedupeKey = `${membership.userId}:${membership.workspaceId}`;
+        if (seen.has(dedupeKey)) return false;
+        seen.add(dedupeKey);
+        return true;
+      });
+
+    const total = allMatches.length;
+    const page = allMatches.slice(pageOffset, pageOffset + pageLimit).map((membership) => {
+      const isExternal = membership.workspaceId !== payload.workspaceId;
+      const linkMeta = isExternal ? linkByCounterpartWorkspaceId.get(membership.workspaceId) : null;
+      return {
+        id: membership.user.id,
+        username: membership.user.name || membership.user.email.split("@")[0],
+        displayName: membership.user.name || membership.user.email,
+        email: membership.user.email,
+        avatarUrl: membership.user.image,
+        workspace: {
+          id: membership.workspace.id,
+          name: membership.workspace.name,
+          slug: membership.workspace.slug,
+        },
+        isExternal,
+        collaborationId: linkMeta?.id ?? null,
+      };
+    });
+
+    return res.status(200).json({
+      message: "Collaborators fetched successfully",
+      data: {
+        items: page,
+        total,
+        limit: pageLimit,
+        offset: pageOffset,
+        hasMore: pageOffset + page.length < total,
+      },
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(422).json({
+        message: "Invalid data",
+        errors: error.errors,
+      });
+    }
+    console.error("[collaborator search] error:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
@@ -220,7 +384,54 @@ export const getUserProfile = async (req: Request, res: Response) => {
       });
 
       if (!sharedWorkspaceMember) {
-        return res.status(403).json({ message: "You do not have access to this profile" });
+        const [requesterMemberships, targetMemberships] = await Promise.all([
+          prisma.member.findMany({
+            where: {
+              userId: requester.id,
+              isActive: true,
+              workspace: { deletedAt: null },
+            },
+            select: { workspaceId: true },
+          }),
+          prisma.member.findMany({
+            where: {
+              userId,
+              isActive: true,
+              workspace: { deletedAt: null },
+            },
+            select: { workspaceId: true },
+          }),
+        ]);
+
+        const requesterWorkspaceIds = requesterMemberships.map((m) => m.workspaceId);
+        const targetWorkspaceIds = targetMemberships.map((m) => m.workspaceId);
+
+        const collaborationAccess =
+          requesterWorkspaceIds.length > 0 && targetWorkspaceIds.length > 0
+            ? await prisma.workspaceCollaboration.findFirst({
+                where: {
+                  status: "ACTIVE",
+                  OR: [
+                    {
+                      workspaceAId: { in: requesterWorkspaceIds },
+                      workspaceBId: { in: targetWorkspaceIds },
+                    },
+                    {
+                      workspaceAId: { in: targetWorkspaceIds },
+                      workspaceBId: { in: requesterWorkspaceIds },
+                    },
+                  ],
+                  policy: {
+                    allowExternalDiscovery: true,
+                  },
+                },
+                select: { id: true },
+              })
+            : null;
+
+        if (!collaborationAccess) {
+          return res.status(403).json({ message: "You do not have access to this profile" });
+        }
       }
     }
 
@@ -264,6 +475,76 @@ export const getUserStatus = async (req: Request, res: Response) => {
 
     if (!targetUser) {
       return res.status(404).json({ message: "User not found" });
+    }
+
+    if (requester.id !== userId) {
+      const sharedWorkspaceMember = await prisma.member.findFirst({
+        where: {
+          userId: requester.id,
+          isActive: true,
+          workspace: {
+            deletedAt: null,
+            members: {
+              some: {
+                userId,
+                isActive: true,
+              },
+            },
+          },
+        },
+        select: { id: true },
+      });
+
+      if (!sharedWorkspaceMember) {
+        const [requesterMemberships, targetMemberships] = await Promise.all([
+          prisma.member.findMany({
+            where: {
+              userId: requester.id,
+              isActive: true,
+              workspace: { deletedAt: null },
+            },
+            select: { workspaceId: true },
+          }),
+          prisma.member.findMany({
+            where: {
+              userId,
+              isActive: true,
+              workspace: { deletedAt: null },
+            },
+            select: { workspaceId: true },
+          }),
+        ]);
+
+        const requesterWorkspaceIds = requesterMemberships.map((m) => m.workspaceId);
+        const targetWorkspaceIds = targetMemberships.map((m) => m.workspaceId);
+
+        const collaborationAccess =
+          requesterWorkspaceIds.length > 0 && targetWorkspaceIds.length > 0
+            ? await prisma.workspaceCollaboration.findFirst({
+                where: {
+                  status: "ACTIVE",
+                  OR: [
+                    {
+                      workspaceAId: { in: requesterWorkspaceIds },
+                      workspaceBId: { in: targetWorkspaceIds },
+                    },
+                    {
+                      workspaceAId: { in: targetWorkspaceIds },
+                      workspaceBId: { in: requesterWorkspaceIds },
+                    },
+                  ],
+                  policy: {
+                    allowExternalDiscovery: true,
+                  },
+                },
+                select: { id: true },
+              })
+            : null;
+
+        if (!collaborationAccess) {
+          return res.status(403).json({ message: "You do not have access to this status" });
+        }
+      }
     }
 
     const status = targetUser.presenceStatus ?? "available";

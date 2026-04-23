@@ -151,6 +151,33 @@ export const validateConversationParticipation = async (userId: string, conversa
   }
 };
 
+/** Same rules as messaging-service isCollaborationDmMutationAllowedForConversation (cross-workspace DMs). */
+export const isCollaborationDmMutationAllowed = async (conversationId: string): Promise<boolean> => {
+  try {
+    const { default: prisma } = await import('../config/database.js');
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { collaborationId: true },
+    });
+    if (!conv) return false;
+    if (!conv.collaborationId) return true;
+
+    const link = await prisma.workspaceCollaboration.findFirst({
+      where: {
+        id: conv.collaborationId,
+        status: 'ACTIVE',
+      },
+      include: {
+        policy: { select: { allowCrossWorkspaceDm: true } },
+      },
+    });
+    return !!(link?.policy.allowCrossWorkspaceDm);
+  } catch (error) {
+    console.error('Error checking collaboration DM mutation:', error);
+    return false;
+  }
+};
+
 export const validateWorkspaceMembership = async (userId: string, workspaceId: string): Promise<boolean> => {
   try {
     const { default: prisma } = await import('../config/database.js');
@@ -163,7 +190,42 @@ export const validateWorkspaceMembership = async (userId: string, workspaceId: s
       },
     });
 
-    return !!member;
+    if (member) return true;
+
+    const userWorkspaceMemberships = await prisma.member.findMany({
+      where: {
+        userId,
+        isActive: true,
+      },
+      select: {
+        workspaceId: true,
+      },
+    });
+
+    const userWorkspaceIds = userWorkspaceMemberships.map((entry) => entry.workspaceId);
+    if (!userWorkspaceIds.length) return false;
+
+    const collaboration = await prisma.workspaceCollaboration.findFirst({
+      where: {
+        status: "ACTIVE",
+        OR: [
+          {
+            workspaceAId: { in: userWorkspaceIds },
+            workspaceBId: workspaceId,
+          },
+          {
+            workspaceAId: workspaceId,
+            workspaceBId: { in: userWorkspaceIds },
+          },
+        ],
+        policy: {
+          allowExternalDiscovery: true,
+        },
+      },
+      select: { id: true },
+    });
+
+    return !!collaboration;
   } catch (error) {
     console.error('Error validating workspace membership:', error);
     return false;

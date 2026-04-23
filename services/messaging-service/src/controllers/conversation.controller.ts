@@ -12,6 +12,11 @@ import { z, ZodError } from "zod";
 import { publishMessageCreatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
 import { buildForwardedContent } from "./message.controller.js";
 import { htmlToCleanText } from "../libs/htmlToCleanText.js";
+import {
+  findActiveCollaborationBetweenWorkspaces,
+  isCollaborationDmMutationAllowedForConversation,
+  canUserReadConversationHistory,
+} from "../helpers/collaborationAccess.js";
 
 // Get or create conversation between two users (workspace-specific)
 export const getOrCreateConversation = async (req: Request, res: Response) => {
@@ -57,7 +62,7 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 
-    // Check if target user exists and is a member of the workspace
+    // Check if target user exists and is a member of the source workspace or an actively linked workspace
     const targetUser = await prisma.user.findUnique({
       where: { id: targetUserId },
       select: { 
@@ -66,9 +71,11 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
         image: true,
         members: {
           where: {
-            workspaceId: workspaceId,
             isActive: true
-          }
+          },
+          select: {
+            workspaceId: true,
+          },
         }
       }
     });
@@ -77,34 +84,75 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Target user not found" });
     }
 
-    if (targetUser.members.length === 0) {
-      return res.status(403).json({ message: "Target user is not a member of this workspace" });
+    const targetWorkspaceIds = targetUser.members.map((membership) => membership.workspaceId);
+    const targetInSourceWorkspace = targetWorkspaceIds.includes(workspaceId);
+
+    let collaborationId: string | null = null;
+    if (!targetInSourceWorkspace) {
+      for (const targetWorkspaceId of targetWorkspaceIds) {
+        const collaboration = await findActiveCollaborationBetweenWorkspaces(workspaceId, targetWorkspaceId);
+        if (collaboration?.policy.allowCrossWorkspaceDm) {
+          collaborationId = collaboration.id;
+          break;
+        }
+      }
     }
 
-    // Check if conversation already exists in this workspace
-    // Find conversations where both users are active participants AND it's in this workspace
-    const existingConversation = await prisma.conversation.findFirst({
-      where: {
-        workspaceId: workspaceId, // Filter by workspace
-        AND: [
-          {
-            participants: {
-              some: {
-                userId: user.id,
-                isActive: true
-              }
-            }
-          },
-          {
-            participants: {
-              some: {
-                userId: targetUserId,
-                isActive: true
-              }
-            }
+    if (!targetInSourceWorkspace && !collaborationId) {
+      return res.status(403).json({ message: "Target user is not eligible for cross-workspace DM" });
+    }
+
+    // Check if conversation already exists.
+    // - Same-workspace DM: workspace-scoped (existing behavior)
+    // - Cross-workspace DM: collaboration-scoped so both sides resolve to one thread
+    const existingConversationWhere =
+      collaborationId
+        ? {
+            collaborationId,
+            AND: [
+              {
+                participants: {
+                  some: {
+                    userId: user.id,
+                    isActive: true,
+                  },
+                },
+              },
+              {
+                participants: {
+                  some: {
+                    userId: targetUserId,
+                    isActive: true,
+                  },
+                },
+              },
+            ],
           }
-        ]
-      },
+        : {
+            workspaceId: workspaceId,
+            collaborationId: null,
+            AND: [
+              {
+                participants: {
+                  some: {
+                    userId: user.id,
+                    isActive: true,
+                  },
+                },
+              },
+              {
+                participants: {
+                  some: {
+                    userId: targetUserId,
+                    isActive: true,
+                  },
+                },
+              },
+            ],
+          };
+
+    const existingConversation = await prisma.conversation.findFirst({
+      where: existingConversationWhere,
       include: {
         participants: {
           where: {
@@ -167,7 +215,8 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
     // Create new conversation in this workspace
     const conversation = await prisma.conversation.create({
       data: {
-        workspaceId: workspaceId, // Associate with workspace
+        workspaceId: workspaceId, // Associate with source workspace
+        collaborationId: collaborationId ?? undefined,
         participants: {
           create: [
             { userId: user.id, isActive: true },
@@ -286,7 +335,16 @@ export const getUserConversations = async (req: Request, res: Response) => {
 
     console.log('[getUserConversations] Found', conversations.length, 'conversations');
 
-    const responseData = conversations.map(conv => {
+    const readability = await Promise.all(
+      conversations.map(async (conv) => ({
+        id: conv.id,
+        canRead: await canUserReadConversationHistory(conv.id, user.id),
+      }))
+    );
+    const readableConversationIds = new Set(readability.filter((row) => row.canRead).map((row) => row.id));
+    const readableConversations = conversations.filter((conv) => readableConversationIds.has(conv.id));
+
+    const responseData = readableConversations.map(conv => {
       // Filter out the current user from participants for cleaner response
       const otherParticipants = conv.participants.filter(p => p.userId !== user.id);
       
@@ -333,16 +391,8 @@ export const getConversationMessages = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Invalid before cursor" });
     }
 
-    // Check if user is participant of the conversation
-    const participant = await prisma.conversationParticipant.findFirst({
-      where: {
-        conversationId,
-        userId: user.id,
-        isActive: true
-      }
-    });
-
-    if (!participant) {
+    const canReadHistory = await canUserReadConversationHistory(conversationId, user.id);
+    if (!canReadHistory) {
       return res.status(403).json({ message: "You are not a participant of this conversation" });
     }
 
@@ -474,6 +524,13 @@ export const sendDirectMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a participant of this conversation" });
     }
 
+    const dmMutationOk = await isCollaborationDmMutationAllowedForConversation(conversationId);
+    if (!dmMutationOk) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; messaging is disabled for this conversation.",
+      });
+    }
+
     // If replying, check if the original message exists
     if (replyToId) {
       const originalMessage = await prisma.message.findUnique({
@@ -576,6 +633,13 @@ export const forwardToDirectMessage = async (req: Request, res: Response) => {
     });
     if (!participant) {
       return res.status(403).json({ message: "You are not a participant of this conversation" });
+    }
+
+    const forwardDmOk = await isCollaborationDmMutationAllowedForConversation(conversationId);
+    if (!forwardDmOk) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; messaging is disabled for this conversation.",
+      });
     }
 
     // Load original message with source context
@@ -734,6 +798,13 @@ export const sendDirectMessageWithAttachments = async (req: Request, res: Respon
       return res.status(403).json({ message: "You are not a participant of this conversation" });
     }
 
+    const dmAttachOk = await isCollaborationDmMutationAllowedForConversation(conversationId);
+    if (!dmAttachOk) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; messaging is disabled for this conversation.",
+      });
+    }
+
     // Check if user can send attachments (enabled for workspace, or user is admin/moderator)
     const canSendAttachments = await canUserSendAttachmentsToConversation(conversationId, user.id);
     if (!canSendAttachments) {
@@ -880,6 +951,13 @@ export const deleteDirectMessage = async (req: Request, res: Response) => {
 
     if (!participant) {
       return res.status(403).json({ message: "You are not a participant of this conversation" });
+    }
+
+    const dmDeleteOk = await isCollaborationDmMutationAllowedForConversation(conversationId);
+    if (!dmDeleteOk) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; messaging is disabled for this conversation.",
+      });
     }
 
     // Only message author can delete

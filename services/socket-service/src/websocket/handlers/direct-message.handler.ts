@@ -11,6 +11,7 @@ import {
   validateConversationParticipation,
   getUserInfo,
   validateChannelMembership,
+  isCollaborationDmMutationAllowed,
 } from '../utils.js';
 import {
   sendDirectMessageSchema,
@@ -60,25 +61,6 @@ export const handleSendDirectMessage = async (
       throw new Error('You are not a participant of this conversation');
     }
 
-    // Check if user can send attachments (if attachments are provided)
-    if (data.attachments && data.attachments.length > 0) {
-      const canSendAttachments =
-        await canUserSendAttachmentsToConversation(
-          data.conversationId,
-          socket.data.user.id
-        );
-      if (!canSendAttachments) {
-        throw new Error('File attachments are disabled for this conversation');
-      }
-    }
-
-    // Get user info
-    const userInfo = await getUserInfo(socket.data.user.id);
-    if (!userInfo) {
-      throw new Error('User not found');
-    }
-
-    // Save message to database
     const { default: prisma } = await import('../../config/database.js');
 
     // Idempotency: if the client retries the same message, return the previously created message.
@@ -135,6 +117,28 @@ export const handleSendDirectMessage = async (
         });
         return;
       }
+    }
+
+    const dmMutationOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmMutationOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
+    }
+
+    if (data.attachments && data.attachments.length > 0) {
+      const canSendAttachments = await canUserSendAttachmentsToConversation(
+        data.conversationId,
+        socket.data.user.id
+      );
+      if (!canSendAttachments) {
+        throw new Error('File attachments are disabled for this conversation');
+      }
+    }
+
+    const userInfo = await getUserInfo(socket.data.user.id);
+    if (!userInfo) {
+      throw new Error('User not found');
     }
 
     // If replying, check if the original message exists and is not deleted
@@ -390,6 +394,13 @@ export const handleEditDirectMessage = async (
       throw new Error('You are not a participant of this conversation');
     }
 
+    const dmEditOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmEditOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
+    }
+
     // Update message in database
     const { default: prisma } = await import('../../config/database.js');
     const message = await prisma.message.findUnique({
@@ -483,6 +494,13 @@ export const handleDeleteDirectMessage = async (
     );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
+    }
+
+    const dmDeleteOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmDeleteOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
     }
 
     // Soft delete message from database
@@ -588,6 +606,13 @@ export const handleAddDirectReaction = async (
     );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
+    }
+
+    const dmReactOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmReactOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
     }
 
     // Add reaction to database
@@ -702,6 +727,13 @@ export const handleRemoveDirectReaction = async (
       throw new Error('You are not a participant of this conversation');
     }
 
+    const dmRemoveReactOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmRemoveReactOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
+    }
+
     // Remove reaction from database
     const { default: prisma } = await import('../../config/database.js');
     const message = await prisma.message.findUnique({
@@ -794,6 +826,13 @@ export const handleForwardDirectMessage = async (
     );
     if (!isTargetParticipant) {
       throw new Error('You are not a participant of the target conversation');
+    }
+
+    const forwardTargetOk = await isCollaborationDmMutationAllowed(data.targetConversationId);
+    if (!forwardTargetOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
     }
 
     const { default: prisma } = await import('../../config/database.js');

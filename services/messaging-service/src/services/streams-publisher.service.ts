@@ -183,6 +183,52 @@ export async function publishWorkspaceEvent(
   }
 }
 
+export type CollaborationInvalidateReason =
+  | 'request_created'
+  | 'request_rejected'
+  | 'link_approved'
+  | 'link_revoked'
+  | 'shared_channel_created'
+  | 'external_dm_created';
+
+/**
+ * Notify all members in affected workspaces to refresh collaboration-derived UI
+ * (admin requests/links, federated DM list, shared channel list on the partner workspace).
+ */
+export async function publishCollaborationInvalidate(payload: {
+  workspaceIds: string[];
+  reason: CollaborationInvalidateReason;
+  collaborationId?: string | null;
+  channelId?: string | null;
+  conversationId?: string | null;
+  requestId?: string | null;
+}) {
+  try {
+    const uniqueIds = [...new Set(payload.workspaceIds.filter(Boolean))];
+    if (uniqueIds.length === 0) return;
+
+    const event: StreamEvent = {
+      eventId: randomUUID(),
+      type: 'collaboration.updated',
+      data: {
+        workspaceIds: uniqueIds,
+        reason: payload.reason,
+        collaborationId: payload.collaborationId ?? null,
+        channelId: payload.channelId ?? null,
+        conversationId: payload.conversationId ?? null,
+        requestId: payload.requestId ?? null,
+      },
+      timestamp: new Date().toISOString(),
+      source: 'messaging-service',
+    };
+
+    await publishEvent(STREAMS.WORKSPACE_EVENTS, event);
+    console.log('[Streams] Published collaboration.updated:', payload.reason, uniqueIds);
+  } catch (error) {
+    console.error('[Streams] Failed to publish collaboration.updated event:', error);
+  }
+}
+
 export async function publishChannelEvent(
   type: 'channel.created' | 'channel.updated' | 'channel.deleted',
   channel: any

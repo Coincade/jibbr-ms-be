@@ -31,6 +31,8 @@ export interface SearchResults {
     member_count?: number;
     type?: 'public' | 'private';
     image?: string;
+    /** Home workspace of the channel (needed for collab / partner public channels). */
+    workspace_id?: string;
   }>;
   users: Array<{
     id: string;
@@ -65,6 +67,36 @@ export interface SearchResults {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
+
+/** Counterpart workspaces for global search (people + public channels) when collab allows discovery. */
+async function getCollaborationSearchWorkspaceIds(
+  userMemberWorkspaceIds: string[]
+): Promise<string[]> {
+  if (userMemberWorkspaceIds.length === 0) return [];
+  const links = await prisma.workspaceCollaboration.findMany({
+    where: {
+      status: 'ACTIVE',
+      OR: [
+        { workspaceAId: { in: userMemberWorkspaceIds } },
+        { workspaceBId: { in: userMemberWorkspaceIds } },
+      ],
+    },
+    include: {
+      policy: { select: { allowExternalDiscovery: true } },
+    },
+  });
+  const extra = new Set<string>();
+  for (const link of links) {
+    if (!link.policy.allowExternalDiscovery) continue;
+    if (userMemberWorkspaceIds.includes(link.workspaceAId)) {
+      extra.add(link.workspaceBId);
+    }
+    if (userMemberWorkspaceIds.includes(link.workspaceBId)) {
+      extra.add(link.workspaceAId);
+    }
+  }
+  return [...extra];
+}
 
 /** Display quotas: show top N per group for focused results */
 const CHANNELS_QUOTA = 3;
@@ -149,6 +181,9 @@ export async function performSearch(
     return emptyResults(q, Date.now() - start);
   }
 
+  const collaboratorWorkspaceIds = await getCollaborationSearchWorkspaceIds(workspaceIds);
+  const searchWorkspaceIds = [...new Set([...workspaceIds, ...collaboratorWorkspaceIds])];
+
   // Channels user is a member of
   const channelMemberships = await prisma.channelMember.findMany({
     where: { userId, isActive: true },
@@ -156,10 +191,10 @@ export async function performSearch(
   });
   const joinedChannelIds = new Set(channelMemberships.map((c) => c.channelId));
 
-  // All channels in user's workspaces (for search) - user can see public channels
+  // All channels in member workspaces + linked workspaces (public channel discovery in partner org)
   const allChannelsInWorkspaces = await prisma.channel.findMany({
     where: {
-      workspaceId: { in: workspaceIds },
+      workspaceId: { in: searchWorkspaceIds },
       deletedAt: null,
     },
     select: {
@@ -167,6 +202,7 @@ export async function performSearch(
       name: true,
       type: true,
       image: true,
+      workspaceId: true,
       _count: { select: { members: true } },
     },
   });
@@ -238,8 +274,8 @@ export async function performSearch(
 
   const [messagesRes, channelsRes, usersRes, filesRes] = await Promise.all([
     searchMessages(messageWhere, searchTerm, limit, offset),
-    searchChannels(workspaceIds, searchTerm, joinedChannelIds, allChannelsInWorkspaces),
-    searchUsers(workspaceIds, searchTerm, userId),
+    searchChannels(searchWorkspaceIds, searchTerm, joinedChannelIds, allChannelsInWorkspaces),
+    searchUsers(searchWorkspaceIds, searchTerm, userId),
     searchFiles(messageWhere, searchTerm, limit),
   ]);
 
@@ -334,7 +370,7 @@ async function searchMessages(
 }
 
 async function searchChannels(
-  workspaceIds: string[],
+  _workspaceIds: string[],
   searchTerm: string | null,
   joinedChannelIds: Set<string>,
   allChannels: Array<{
@@ -342,6 +378,7 @@ async function searchChannels(
     name: string;
     type: string;
     image: string | null;
+    workspaceId: string;
     _count: { members: number };
   }>
 ): Promise<{ channels: SearchResults['channels']; total: number }> {
@@ -370,6 +407,7 @@ async function searchChannels(
     member_count: s.item._count.members,
     type: (s.item.type === 'PUBLIC' ? 'public' : 'private') as 'public' | 'private',
     image: s.item.image ?? undefined,
+    workspace_id: s.item.workspaceId,
   }));
 
   return { channels: top, total };
@@ -400,7 +438,13 @@ async function searchUsers(
   });
 
   const term = searchTerm?.replace(/%/g, '') ?? '';
-  let users = members.map((m) => m.user).filter(Boolean);
+  const userById = new Map<string, NonNullable<(typeof members)[0]['user']>>();
+  for (const m of members) {
+    const u = m.user;
+    if (!u) continue;
+    if (!userById.has(u.id)) userById.set(u.id, u);
+  }
+  let users = Array.from(userById.values());
   if (term) {
     users = users.filter(
       (u) =>

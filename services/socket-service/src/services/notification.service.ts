@@ -10,6 +10,9 @@ export interface NotificationData {
     | 'REACTION'
     | 'CHANNEL_INVITE'
     | 'WORKSPACE_INVITE'
+    | 'COLLABORATION_REQUEST'
+    | 'COLLABORATION_APPROVED'
+    | 'COLLABORATION_REVOKED'
     | 'SYSTEM';
   title: string;
   message: string;

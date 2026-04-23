@@ -399,6 +399,25 @@ async function handleWorkspaceEvent(event: StreamEvent) {
       }
       break;
 
+    case 'collaboration.updated': {
+      const ids = data.workspaceIds as string[] | undefined;
+      if (!Array.isArray(ids) || ids.length === 0) break;
+      const envelope = {
+        workspaceIds: ids,
+        reason: data.reason as string | undefined,
+        collaborationId: data.collaborationId ?? null,
+        channelId: data.channelId ?? null,
+        conversationId: data.conversationId ?? null,
+        requestId: data.requestId ?? null,
+        timestamp: event.timestamp,
+      };
+      for (const wid of ids) {
+        ioInstance.to(`workspace:${wid}`).emit('collaboration_updated', envelope);
+      }
+      console.log(`[Streams] Broadcasted collaboration.updated to ${ids.length} workspace(s)`);
+      break;
+    }
+
     default:
       console.warn('[Streams] Unknown workspace event type:', type);
   }

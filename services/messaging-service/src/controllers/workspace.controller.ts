@@ -7,6 +7,39 @@ import { getEmailDomain } from "../helpers/domainUtils.js";
 import { createWorkspaceSchema, joinWorkspaceSchema, joinWorkspaceByCodeSchema } from "../validation/workspace.validations.js";
 import { ZodError } from "zod";
 import { publishWorkspaceEvent } from "../services/streams-publisher.service.js";
+import { canAccessWorkspaceResource } from "../helpers/collaborationAccess.js";
+
+const toWorkspaceSlug = (name: string): string => {
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "workspace";
+};
+
+const buildUniqueWorkspaceSlug = async (workspaceName: string): Promise<string> => {
+  const baseSlug = toWorkspaceSlug(workspaceName);
+
+  const directMatch = await prisma.workspace.findFirst({
+    where: { slug: baseSlug },
+    select: { id: true },
+  });
+  if (!directMatch) return baseSlug;
+
+  let suffix = 2;
+  while (suffix <= 1000) {
+    const candidate = `${baseSlug}-${suffix}`;
+    const taken = await prisma.workspace.findFirst({
+      where: { slug: candidate },
+      select: { id: true },
+    });
+    if (!taken) return candidate;
+    suffix += 1;
+  }
+
+  return `${baseSlug}-${Date.now().toString(36)}`;
+};
 
 
 export const createWorkspace = async (req: Request, res: Response) => {
@@ -43,9 +76,11 @@ export const createWorkspace = async (req: Request, res: Response) => {
       }
     }
 
+    const workspaceSlug = await buildUniqueWorkspaceSlug(payload.name);
     const workspace = await prisma.workspace.create({
       data: {
         name: payload.name,
+        slug: workspaceSlug,
         joinCode: joinCode,
         userId: user.id,
       },
@@ -303,6 +338,11 @@ export const getWorkspaceMembers = async (req: Request, res: Response) => {
     if (!workspace) {
       return res.status(422).json({ message: "Workspace not found" });
     }
+
+    const canAccess = await canAccessWorkspaceResource(user.id, workspace.id, "workspace");
+    if (!canAccess) {
+      return res.status(403).json({ message: "You don't have access to this workspace" });
+    }
     const members = await prisma.member.findMany({
       where: {
         workspaceId: workspace.id,
@@ -534,7 +574,7 @@ export const updateWorkspace = async (req: Request, res: Response) => {
     }
 
     const workspaceId = req.params.id;
-    const { name, fileAttachmentsEnabled } = req.body;
+    const { name, fileAttachmentsEnabled, image } = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Name is required" });
@@ -572,6 +612,9 @@ export const updateWorkspace = async (req: Request, res: Response) => {
     // Only allow fileAttachmentsEnabled to be updated by admins
     if (fileAttachmentsEnabled !== undefined && (isWorkspaceCreator || isAdmin)) {
       updateData.fileAttachmentsEnabled = fileAttachmentsEnabled;
+    }
+    if (image !== undefined && (isWorkspaceCreator || isAdmin)) {
+      updateData.image = image;
     }
 
     const workspace = await prisma.workspace.update({

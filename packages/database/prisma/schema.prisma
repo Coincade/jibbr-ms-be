@@ -54,6 +54,11 @@ model User {
   channelInvites           ChannelInvite[]
   userRecents              UserRecent[]
   mutedChannels            UserChannelMute[]
+  collaborationRequestsSent WorkspaceCollaborationRequest[] @relation("CollabRequestInitiatorUser")
+  collaborationRequestsResponded WorkspaceCollaborationRequest[] @relation("CollabRequestResponderUser")
+  collaborationLinksRevoked WorkspaceCollaboration[] @relation("CollabRevokedByUser")
+  collaborationPoliciesCreated CollaborationPolicy[]
+  collaborationAuditLogs    CollaborationAuditLog[]
 }
 
 model ChannelInvite {
@@ -83,6 +88,7 @@ enum InviteStatus {
 model Workspace {
   id                     String    @id @default(cuid())
   name                   String
+  slug                   String    @unique
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @default(now()) @updatedAt
   joinCode               String
@@ -94,6 +100,10 @@ model Workspace {
   channels               Channel[]
   members                Member[]
   conversations          Conversation[]
+  collaborationRequestsSent WorkspaceCollaborationRequest[] @relation("CollabRequestSenderWorkspace")
+  collaborationRequestsReceived WorkspaceCollaborationRequest[] @relation("CollabRequestTargetWorkspace")
+  collaborationsAsA      WorkspaceCollaboration[] @relation("CollabWorkspaceA")
+  collaborationsAsB      WorkspaceCollaboration[] @relation("CollabWorkspaceB")
   user                   User      @relation(fields: [userId], references: [id])
   userRecents            UserRecent[]
 }
@@ -105,6 +115,7 @@ model Channel {
   description       String?
   type              ChannelType        @default(PUBLIC)
   isBridgeChannel   Boolean            @default(false)
+  collaborationId   String?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @default(now()) @updatedAt
   workspaceId       String
@@ -113,11 +124,14 @@ model Channel {
   channelAdminId    String
   channelAdmin      User               @relation(fields: [channelAdminId], references: [id])
   workspace         Workspace          @relation(fields: [workspaceId], references: [id])
+  collaboration     WorkspaceCollaboration? @relation(fields: [collaborationId], references: [id])
   members           ChannelMember[]
   invites           ChannelInvite[]
   forwardedMessages ForwardedMessage[]
   messages          Message[]
   mutedByUsers      UserChannelMute[]
+
+  @@index([collaborationId])
 }
 
 model UserChannelMute {
@@ -141,6 +155,8 @@ model Conversation {
   // Workspace-specific DMs - each DM conversation belongs to a workspace
   workspaceId       String
   workspace         Workspace                 @relation(fields: [workspaceId], references: [id])
+  collaborationId   String?
+  collaboration     WorkspaceCollaboration?   @relation(fields: [collaborationId], references: [id])
   
   participants      ConversationParticipant[]
   readStatuses      ConversationReadStatus[]
@@ -148,6 +164,7 @@ model Conversation {
   messages          Message[]
   
   @@index([workspaceId])
+  @@index([collaborationId])
 }
 
 model ConversationParticipant {
@@ -369,6 +386,9 @@ enum NotificationType {
   REACTION
   CHANNEL_INVITE
   WORKSPACE_INVITE
+  COLLABORATION_REQUEST
+  COLLABORATION_APPROVED
+  COLLABORATION_REVOKED
   SYSTEM
 }
 
@@ -395,5 +415,105 @@ model UserRecent {
 
   @@unique([userId, workspaceId, type, targetId])
   @@index([userId, workspaceId, lastOpenedAt(sort: Desc)])
+}
+
+enum WorkspaceCollaborationRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  REVOKED
+  EXPIRED
+}
+
+enum WorkspaceCollaborationStatus {
+  ACTIVE
+  REVOKED
+}
+
+model WorkspaceCollaborationRequest {
+  id                    String                              @id @default(cuid())
+  requestingWorkspaceId String
+  targetWorkspaceId     String
+  requestedByUserId     String
+  respondedByUserId     String?
+  status                WorkspaceCollaborationRequestStatus @default(PENDING)
+  message               String?
+  policyTemplate        Json?
+  requestedAt           DateTime                            @default(now())
+  respondedAt           DateTime?
+  createdAt             DateTime                            @default(now())
+  updatedAt             DateTime                            @default(now()) @updatedAt
+  collaborationId       String?
+
+  requestingWorkspace   Workspace               @relation("CollabRequestSenderWorkspace", fields: [requestingWorkspaceId], references: [id])
+  targetWorkspace       Workspace               @relation("CollabRequestTargetWorkspace", fields: [targetWorkspaceId], references: [id])
+  requestedBy           User                    @relation("CollabRequestInitiatorUser", fields: [requestedByUserId], references: [id])
+  respondedBy           User?                   @relation("CollabRequestResponderUser", fields: [respondedByUserId], references: [id])
+  collaboration         WorkspaceCollaboration? @relation("CollaborationRequestLink", fields: [collaborationId], references: [id])
+  createdCollaboration  WorkspaceCollaboration? @relation("CollaborationCreatedFromRequest")
+
+  @@index([requestingWorkspaceId, status])
+  @@index([targetWorkspaceId, status])
+  @@index([requestedByUserId])
+}
+
+model WorkspaceCollaboration {
+  id                   String                     @id @default(cuid())
+  workspaceAId         String
+  workspaceBId         String
+  status               WorkspaceCollaborationStatus @default(ACTIVE)
+  policyId             String
+  createdFromRequestId String?                     @unique
+  acceptedAt           DateTime?
+  revokedAt            DateTime?
+  revokedByUserId      String?
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @default(now()) @updatedAt
+
+  workspaceA           Workspace                      @relation("CollabWorkspaceA", fields: [workspaceAId], references: [id])
+  workspaceB           Workspace                      @relation("CollabWorkspaceB", fields: [workspaceBId], references: [id])
+  policy               CollaborationPolicy            @relation(fields: [policyId], references: [id])
+  createdFromRequest   WorkspaceCollaborationRequest? @relation("CollaborationCreatedFromRequest", fields: [createdFromRequestId], references: [id])
+  revokedBy            User?                          @relation("CollabRevokedByUser", fields: [revokedByUserId], references: [id])
+  channels             Channel[]
+  conversations        Conversation[]
+  auditLogs            CollaborationAuditLog[]
+  requests             WorkspaceCollaborationRequest[] @relation("CollaborationRequestLink")
+
+  @@index([workspaceAId, status])
+  @@index([workspaceBId, status])
+  @@index([policyId])
+}
+
+model CollaborationPolicy {
+  id                     String                   @id @default(cuid())
+  name                   String
+  allowExternalDiscovery Boolean                  @default(false)
+  allowCrossWorkspaceDm  Boolean                  @default(false)
+  allowSharedChannels    Boolean                  @default(false)
+  allowFileSharing       Boolean                  @default(false)
+  createdByUserId        String
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @default(now()) @updatedAt
+
+  createdBy              User                     @relation(fields: [createdByUserId], references: [id])
+  collaborations         WorkspaceCollaboration[]
+
+  @@index([createdByUserId])
+}
+
+model CollaborationAuditLog {
+  id              String                 @id @default(cuid())
+  collaborationId String
+  actorUserId     String
+  eventType       String
+  eventPayload    Json?
+  createdAt       DateTime               @default(now())
+
+  collaboration   WorkspaceCollaboration @relation(fields: [collaborationId], references: [id], onDelete: Cascade)
+  actor           User                   @relation(fields: [actorUserId], references: [id])
+
+  @@index([collaborationId, createdAt])
+  @@index([actorUserId, createdAt])
 }
 

@@ -39,3 +39,16 @@ export const readHeavyLimiter = createJwtOrIpRateLimiter({
   windowMs: readHeavyWindowMs,
   limit: readHeavyLimit,
 });
+
+const collabSearchWindowMs = parsePositiveInt(
+  process.env.COLLAB_SEARCH_RATE_LIMIT_WINDOW_MS,
+  60_000
+);
+const collabSearchLimit = parsePositiveInt(process.env.COLLAB_SEARCH_RATE_LIMIT_MAX, 40);
+
+/** Stricter limit for federated collaborator search (enumeration / load). */
+export const collaboratorSearchLimiter = createJwtOrIpRateLimiter({
+  windowMs: collabSearchWindowMs,
+  limit: collabSearchLimit,
+  message: "Too many collaborator searches. Please wait a moment and try again.",
+});
