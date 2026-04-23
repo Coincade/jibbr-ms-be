@@ -50,6 +50,89 @@ const isPolicyAllowedForSearchMode = (
 };
 
 /**
+ * Unified discovery access check used by profile/status endpoints.
+ * Returns true when users share:
+ * - same active workspace membership, OR
+ * - active pairwise collaboration with allowExternalDiscovery, OR
+ * - active collaboration group with allowExternalDiscovery.
+ */
+const canRequesterDiscoverTargetUser = async (
+  requesterId: string,
+  targetUserId: string
+): Promise<boolean> => {
+  const [requesterMemberships, targetMemberships] = await Promise.all([
+    prisma.member.findMany({
+      where: {
+        userId: requesterId,
+        isActive: true,
+        workspace: { isActive: true, deletedAt: null },
+      },
+      select: { workspaceId: true },
+    }),
+    prisma.member.findMany({
+      where: {
+        userId: targetUserId,
+        isActive: true,
+        workspace: { isActive: true, deletedAt: null },
+      },
+      select: { workspaceId: true },
+    }),
+  ]);
+
+  const requesterWorkspaceIds = requesterMemberships.map((m) => m.workspaceId);
+  const targetWorkspaceIds = targetMemberships.map((m) => m.workspaceId);
+  if (!requesterWorkspaceIds.length || !targetWorkspaceIds.length) return false;
+
+  const targetWorkspaceSet = new Set(targetWorkspaceIds);
+  if (requesterWorkspaceIds.some((id) => targetWorkspaceSet.has(id))) return true;
+
+  const [collaborationAccess, groupAccess] = await Promise.all([
+    prisma.workspaceCollaboration.findFirst({
+      where: {
+        status: "ACTIVE",
+        OR: [
+          {
+            workspaceAId: { in: requesterWorkspaceIds },
+            workspaceBId: { in: targetWorkspaceIds },
+          },
+          {
+            workspaceAId: { in: targetWorkspaceIds },
+            workspaceBId: { in: requesterWorkspaceIds },
+          },
+        ],
+        policy: { allowExternalDiscovery: true },
+      },
+      select: { id: true },
+    }),
+    prisma.collaborationGroup.findFirst({
+      where: {
+        status: "ACTIVE",
+        policy: { allowExternalDiscovery: true },
+        memberships: {
+          some: {
+            workspaceId: { in: requesterWorkspaceIds },
+            status: "ACTIVE",
+          },
+        },
+        AND: [
+          {
+            memberships: {
+              some: {
+                workspaceId: { in: targetWorkspaceIds },
+                status: "ACTIVE",
+              },
+            },
+          },
+        ],
+      },
+      select: { id: true },
+    }),
+  ]);
+
+  return Boolean(collaborationAccess || groupAccess);
+};
+
+/**
  * Search users who can access a channel (prefix search)
  * GET /api/users/search?workspaceId=&channelId=&q=
  */
@@ -194,39 +277,76 @@ export const searchCollaborators = async (req: Request, res: Response) => {
     });
 
     const eligibleLinks = activeLinks.filter((link) => isPolicyAllowedForSearchMode(link.policy, searchMode));
-    const linkByCounterpartWorkspaceId = new Map<string, { id: string }>();
+    // Context metadata used by FE to scope DMs/shared-channel creation.
+    const contextByCounterpartWorkspaceId = new Map<
+      string,
+      { collaborationId: string | null; groupId: string | null }
+    >();
     for (const link of eligibleLinks) {
       const counterpartWorkspaceId =
         link.workspaceAId === payload.workspaceId ? link.workspaceBId : link.workspaceAId;
-      linkByCounterpartWorkspaceId.set(counterpartWorkspaceId, { id: link.id });
+      contextByCounterpartWorkspaceId.set(counterpartWorkspaceId, {
+        collaborationId: link.id,
+        groupId: null,
+      });
     }
 
-    const workspaceIds = [payload.workspaceId, ...Array.from(linkByCounterpartWorkspaceId.keys())];
+    // Also pull in group-linked workspaces (N-way collaboration)
+    const groupMemberships = await prisma.collaborationGroupMembership.findMany({
+      where: {
+        workspaceId: payload.workspaceId,
+        status: "ACTIVE",
+        group: { status: "ACTIVE" },
+      },
+      include: {
+        group: {
+          include: {
+            policy: {
+              select: { allowExternalDiscovery: true, allowSharedChannels: true, allowCrossWorkspaceDm: true },
+            },
+            memberships: {
+              where: { status: "ACTIVE", workspaceId: { not: payload.workspaceId } },
+              select: { workspaceId: true },
+            },
+          },
+        },
+      },
+    });
+    for (const gm of groupMemberships) {
+      if (!isPolicyAllowedForSearchMode(gm.group.policy, searchMode)) continue;
+      for (const otherMembership of gm.group.memberships) {
+        const existing = contextByCounterpartWorkspaceId.get(otherMembership.workspaceId);
+        contextByCounterpartWorkspaceId.set(otherMembership.workspaceId, {
+          collaborationId: existing?.collaborationId ?? null,
+          groupId: gm.group.id,
+        });
+      }
+    }
+
+    const workspaceIds = [payload.workspaceId, ...Array.from(contextByCounterpartWorkspaceId.keys())];
+
     const memberships = await prisma.member.findMany({
       where: {
         workspaceId: { in: workspaceIds },
         isActive: true,
+        ...(payload.q
+          ? {
+              user: {
+                OR: [
+                  { name: { contains: payload.q, mode: "insensitive" } },
+                  { email: { contains: payload.q, mode: "insensitive" } },
+                ],
+              },
+            }
+          : {}),
       },
       select: {
         workspaceId: true,
         userId: true,
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            image: true,
-          },
-        },
-        workspace: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
+        user: { select: { id: true, name: true, email: true, image: true } },
+        workspace: { select: { id: true, name: true, slug: true } },
       },
-      take: 200,
+      orderBy: [{ workspaceId: "asc" }, { userId: "asc" }],
     });
 
     const q = payload.q?.trim().toLowerCase() ?? "";
@@ -249,7 +369,7 @@ export const searchCollaborators = async (req: Request, res: Response) => {
     const total = allMatches.length;
     const page = allMatches.slice(pageOffset, pageOffset + pageLimit).map((membership) => {
       const isExternal = membership.workspaceId !== payload.workspaceId;
-      const linkMeta = isExternal ? linkByCounterpartWorkspaceId.get(membership.workspaceId) : null;
+      const context = isExternal ? contextByCounterpartWorkspaceId.get(membership.workspaceId) : null;
       return {
         id: membership.user.id,
         username: membership.user.name || membership.user.email.split("@")[0],
@@ -262,7 +382,8 @@ export const searchCollaborators = async (req: Request, res: Response) => {
           slug: membership.workspace.slug,
         },
         isExternal,
-        collaborationId: linkMeta?.id ?? null,
+        collaborationId: context?.collaborationId ?? null,
+        groupId: context?.groupId ?? null,
       };
     });
 
@@ -366,72 +487,9 @@ export const getUserProfile = async (req: Request, res: Response) => {
     }
 
     if (requester.id !== userId) {
-      const sharedWorkspaceMember = await prisma.member.findFirst({
-        where: {
-          userId: requester.id,
-          isActive: true,
-          workspace: {
-            deletedAt: null,
-            members: {
-              some: {
-                userId,
-                isActive: true,
-              },
-            },
-          },
-        },
-        select: { id: true },
-      });
-
-      if (!sharedWorkspaceMember) {
-        const [requesterMemberships, targetMemberships] = await Promise.all([
-          prisma.member.findMany({
-            where: {
-              userId: requester.id,
-              isActive: true,
-              workspace: { deletedAt: null },
-            },
-            select: { workspaceId: true },
-          }),
-          prisma.member.findMany({
-            where: {
-              userId,
-              isActive: true,
-              workspace: { deletedAt: null },
-            },
-            select: { workspaceId: true },
-          }),
-        ]);
-
-        const requesterWorkspaceIds = requesterMemberships.map((m) => m.workspaceId);
-        const targetWorkspaceIds = targetMemberships.map((m) => m.workspaceId);
-
-        const collaborationAccess =
-          requesterWorkspaceIds.length > 0 && targetWorkspaceIds.length > 0
-            ? await prisma.workspaceCollaboration.findFirst({
-                where: {
-                  status: "ACTIVE",
-                  OR: [
-                    {
-                      workspaceAId: { in: requesterWorkspaceIds },
-                      workspaceBId: { in: targetWorkspaceIds },
-                    },
-                    {
-                      workspaceAId: { in: targetWorkspaceIds },
-                      workspaceBId: { in: requesterWorkspaceIds },
-                    },
-                  ],
-                  policy: {
-                    allowExternalDiscovery: true,
-                  },
-                },
-                select: { id: true },
-              })
-            : null;
-
-        if (!collaborationAccess) {
-          return res.status(403).json({ message: "You do not have access to this profile" });
-        }
+      const canDiscover = await canRequesterDiscoverTargetUser(requester.id, userId);
+      if (!canDiscover) {
+        return res.status(403).json({ message: "You do not have access to this profile" });
       }
     }
 
@@ -478,72 +536,9 @@ export const getUserStatus = async (req: Request, res: Response) => {
     }
 
     if (requester.id !== userId) {
-      const sharedWorkspaceMember = await prisma.member.findFirst({
-        where: {
-          userId: requester.id,
-          isActive: true,
-          workspace: {
-            deletedAt: null,
-            members: {
-              some: {
-                userId,
-                isActive: true,
-              },
-            },
-          },
-        },
-        select: { id: true },
-      });
-
-      if (!sharedWorkspaceMember) {
-        const [requesterMemberships, targetMemberships] = await Promise.all([
-          prisma.member.findMany({
-            where: {
-              userId: requester.id,
-              isActive: true,
-              workspace: { deletedAt: null },
-            },
-            select: { workspaceId: true },
-          }),
-          prisma.member.findMany({
-            where: {
-              userId,
-              isActive: true,
-              workspace: { deletedAt: null },
-            },
-            select: { workspaceId: true },
-          }),
-        ]);
-
-        const requesterWorkspaceIds = requesterMemberships.map((m) => m.workspaceId);
-        const targetWorkspaceIds = targetMemberships.map((m) => m.workspaceId);
-
-        const collaborationAccess =
-          requesterWorkspaceIds.length > 0 && targetWorkspaceIds.length > 0
-            ? await prisma.workspaceCollaboration.findFirst({
-                where: {
-                  status: "ACTIVE",
-                  OR: [
-                    {
-                      workspaceAId: { in: requesterWorkspaceIds },
-                      workspaceBId: { in: targetWorkspaceIds },
-                    },
-                    {
-                      workspaceAId: { in: targetWorkspaceIds },
-                      workspaceBId: { in: requesterWorkspaceIds },
-                    },
-                  ],
-                  policy: {
-                    allowExternalDiscovery: true,
-                  },
-                },
-                select: { id: true },
-              })
-            : null;
-
-        if (!collaborationAccess) {
-          return res.status(403).json({ message: "You do not have access to this status" });
-        }
+      const canDiscover = await canRequesterDiscoverTargetUser(requester.id, userId);
+      if (!canDiscover) {
+        return res.status(403).json({ message: "You do not have access to this status" });
       }
     }
 

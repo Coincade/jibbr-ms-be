@@ -59,6 +59,9 @@ model User {
   collaborationLinksRevoked WorkspaceCollaboration[] @relation("CollabRevokedByUser")
   collaborationPoliciesCreated CollaborationPolicy[]
   collaborationAuditLogs    CollaborationAuditLog[]
+  collaborationGroupsCreated CollaborationGroup[]
+  collaborationGroupMembershipsInvited CollaborationGroupMembership[] @relation("GroupMembershipInvitedBy")
+  collaborationGroupAuditLogs CollaborationGroupAuditLog[]
 }
 
 model ChannelInvite {
@@ -106,6 +109,7 @@ model Workspace {
   collaborationsAsB      WorkspaceCollaboration[] @relation("CollabWorkspaceB")
   user                   User      @relation(fields: [userId], references: [id])
   userRecents            UserRecent[]
+  groupMemberships       CollaborationGroupMembership[]
 }
 
 model Channel {
@@ -116,6 +120,7 @@ model Channel {
   type              ChannelType        @default(PUBLIC)
   isBridgeChannel   Boolean            @default(false)
   collaborationId   String?
+  groupId           String?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @default(now()) @updatedAt
   workspaceId       String
@@ -125,6 +130,7 @@ model Channel {
   channelAdmin      User               @relation(fields: [channelAdminId], references: [id])
   workspace         Workspace          @relation(fields: [workspaceId], references: [id])
   collaboration     WorkspaceCollaboration? @relation(fields: [collaborationId], references: [id])
+  group             CollaborationGroup?     @relation(fields: [groupId], references: [id])
   members           ChannelMember[]
   invites           ChannelInvite[]
   forwardedMessages ForwardedMessage[]
@@ -132,6 +138,7 @@ model Channel {
   mutedByUsers      UserChannelMute[]
 
   @@index([collaborationId])
+  @@index([groupId])
 }
 
 model UserChannelMute {
@@ -157,7 +164,9 @@ model Conversation {
   workspace         Workspace                 @relation(fields: [workspaceId], references: [id])
   collaborationId   String?
   collaboration     WorkspaceCollaboration?   @relation(fields: [collaborationId], references: [id])
-  
+  groupId           String?
+  group             CollaborationGroup?        @relation(fields: [groupId], references: [id])
+
   participants      ConversationParticipant[]
   readStatuses      ConversationReadStatus[]
   forwardedMessages ForwardedMessage[]
@@ -165,6 +174,7 @@ model Conversation {
   
   @@index([workspaceId])
   @@index([collaborationId])
+  @@index([groupId])
 }
 
 model ConversationParticipant {
@@ -498,6 +508,7 @@ model CollaborationPolicy {
 
   createdBy              User                     @relation(fields: [createdByUserId], references: [id])
   collaborations         WorkspaceCollaboration[]
+  groups                 CollaborationGroup[]
 
   @@index([createdByUserId])
 }
@@ -515,5 +526,77 @@ model CollaborationAuditLog {
 
   @@index([collaborationId, createdAt])
   @@index([actorUserId, createdAt])
+}
+
+// ─── Collaboration Groups (N-way, e.g. Hirect + sister companies) ────────────
+
+enum CollaborationGroupStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum CollaborationGroupRole {
+  OWNER
+  MEMBER
+}
+
+enum CollaborationGroupMemberStatus {
+  INVITED
+  ACTIVE
+  REVOKED
+}
+
+model CollaborationGroup {
+  id              String                      @id @default(cuid())
+  name            String
+  status          CollaborationGroupStatus    @default(ACTIVE)
+  policyId        String
+  createdByUserId String
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @default(now()) @updatedAt
+
+  policy        CollaborationPolicy            @relation(fields: [policyId], references: [id])
+  createdBy     User                           @relation(fields: [createdByUserId], references: [id])
+  memberships   CollaborationGroupMembership[]
+  channels      Channel[]
+  conversations Conversation[]
+  auditLogs     CollaborationGroupAuditLog[]
+
+  @@index([status])
+}
+
+model CollaborationGroupMembership {
+  id              String                         @id @default(cuid())
+  groupId         String
+  workspaceId     String
+  role            CollaborationGroupRole          @default(MEMBER)
+  status          CollaborationGroupMemberStatus  @default(INVITED)
+  invitedByUserId String?
+  respondedAt     DateTime?
+  joinedAt        DateTime?
+  createdAt       DateTime                        @default(now())
+  updatedAt       DateTime                        @default(now()) @updatedAt
+
+  group     CollaborationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  workspace Workspace          @relation(fields: [workspaceId], references: [id])
+  invitedBy User?              @relation("GroupMembershipInvitedBy", fields: [invitedByUserId], references: [id])
+
+  @@unique([groupId, workspaceId])
+  @@index([groupId, status])
+  @@index([workspaceId, status])
+}
+
+model CollaborationGroupAuditLog {
+  id           String   @id @default(cuid())
+  groupId      String
+  actorUserId  String
+  eventType    String
+  eventPayload Json?
+  createdAt    DateTime @default(now())
+
+  group CollaborationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  actor User               @relation(fields: [actorUserId], references: [id])
+
+  @@index([groupId, createdAt])
 }
 

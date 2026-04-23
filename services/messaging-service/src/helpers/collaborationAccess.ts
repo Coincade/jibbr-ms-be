@@ -52,6 +52,68 @@ export const findActiveCollaborationBetweenWorkspaces = async (
   });
 };
 
+/**
+ * Returns the first active CollaborationGroup where both workspaces are ACTIVE members.
+ * Used to check N-way access when pairwise links don't exist.
+ */
+export const findActiveGroupContainingBothWorkspaces = async (
+  workspaceAId: string,
+  workspaceBId: string
+) => {
+  return prisma.collaborationGroup.findFirst({
+    where: {
+      status: "ACTIVE",
+      memberships: {
+        some: { workspaceId: workspaceAId, status: "ACTIVE" },
+      },
+      AND: [
+        {
+          memberships: {
+            some: { workspaceId: workspaceBId, status: "ACTIVE" },
+          },
+        },
+      ],
+    },
+    include: { policy: true },
+  });
+};
+
+/**
+ * Returns true if userWorkspaceIds and resourceWorkspaceId share an active group
+ * whose policy allows the given resource type.
+ */
+export const canAccessViaGroup = async (
+  userWorkspaceIds: string[],
+  resourceWorkspaceId: string,
+  resourceType: CollaborationResourceType
+): Promise<boolean> => {
+  const groups = await prisma.collaborationGroup.findMany({
+    where: {
+      status: "ACTIVE",
+      memberships: {
+        some: { workspaceId: resourceWorkspaceId, status: "ACTIVE" },
+      },
+      AND: [
+        {
+          memberships: {
+            some: { workspaceId: { in: userWorkspaceIds }, status: "ACTIVE" },
+          },
+        },
+      ],
+    },
+    include: {
+      policy: {
+        select: {
+          allowExternalDiscovery: true,
+          allowCrossWorkspaceDm: true,
+          allowSharedChannels: true,
+        },
+      },
+    },
+  });
+  return groups.some((g) => isPolicyAllowedForResource(resourceType, g.policy));
+};
+
 export const isPolicyAllowedForResource = (
   resourceType: CollaborationResourceType,
   policy: {
@@ -119,7 +181,10 @@ export const canAccessWorkspaceResource = async (
     },
   });
 
-  return links.some((link) => isPolicyAllowedForResource(resourceType, link.policy));
+  if (links.some((link) => isPolicyAllowedForResource(resourceType, link.policy))) return true;
+
+  // Fall back to group membership: user's workspace and resourceWorkspaceId share an active group
+  return canAccessViaGroup(userWorkspaceIds, resourceWorkspaceId, resourceType);
 };
 
 /**
@@ -132,21 +197,29 @@ export const isCollaborationDmMutationAllowedForConversation = async (
 ): Promise<boolean> => {
   const conv = await prisma.conversation.findUnique({
     where: { id: conversationId },
-    select: { collaborationId: true },
+    select: { collaborationId: true, groupId: true },
   });
   if (!conv) return false;
-  if (!conv.collaborationId) return true;
 
-  const link = await prisma.workspaceCollaboration.findFirst({
-    where: {
-      id: conv.collaborationId,
-      status: "ACTIVE",
-    },
-    include: {
-      policy: { select: { allowCrossWorkspaceDm: true } },
-    },
-  });
-  return !!(link?.policy.allowCrossWorkspaceDm);
+  // Pairwise collaboration DM
+  if (conv.collaborationId) {
+    const link = await prisma.workspaceCollaboration.findFirst({
+      where: { id: conv.collaborationId, status: "ACTIVE" },
+      include: { policy: { select: { allowCrossWorkspaceDm: true } } },
+    });
+    return !!(link?.policy.allowCrossWorkspaceDm);
+  }
+
+  // Group DM
+  if (conv.groupId) {
+    const group = await prisma.collaborationGroup.findFirst({
+      where: { id: conv.groupId, status: "ACTIVE" },
+      include: { policy: { select: { allowCrossWorkspaceDm: true } } },
+    });
+    return !!(group?.policy.allowCrossWorkspaceDm);
+  }
+
+  return true;
 };
 
 /**
@@ -190,18 +263,30 @@ export const canUserReadChannelHistory = async (
     }),
     prisma.channel.findUnique({
       where: { id: channelId },
-      select: { workspaceId: true, collaborationId: true },
+      select: { workspaceId: true, collaborationId: true, groupId: true },
     }),
   ]);
 
   if (!channel || !channelMember) return false;
-  if (!channel.collaborationId) return true;
+  if (!channel.collaborationId && !channel.groupId) return true;
 
-  const activeLink = await prisma.workspaceCollaboration.findFirst({
-    where: { id: channel.collaborationId, status: "ACTIVE" },
-    select: { id: true },
-  });
-  if (activeLink) return true;
+  // Pairwise shared channel
+  if (channel.collaborationId) {
+    const activeLink = await prisma.workspaceCollaboration.findFirst({
+      where: { id: channel.collaborationId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (activeLink) return true;
+  }
+
+  // Group shared channel
+  if (channel.groupId) {
+    const activeGroup = await prisma.collaborationGroup.findFirst({
+      where: { id: channel.groupId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (activeGroup) return true;
+  }
 
   const hostWorkspaceMember = await prisma.member.findFirst({
     where: { userId, workspaceId: channel.workspaceId, isActive: true },
@@ -227,12 +312,12 @@ export const canUserReadConversationHistory = async (
     }),
     prisma.conversation.findUnique({
       where: { id: conversationId },
-      select: { workspaceId: true, collaborationId: true },
+      select: { workspaceId: true, collaborationId: true, groupId: true },
     }),
   ]);
 
   if (!conversation || !participant) return false;
-  if (!conversation.collaborationId) return true;
+  if (!conversation.collaborationId && !conversation.groupId) return true;
 
   const dmReadable = await isCollaborationDmMutationAllowedForConversation(conversationId);
   if (dmReadable) return true;

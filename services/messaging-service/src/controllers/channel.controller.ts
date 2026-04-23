@@ -11,6 +11,7 @@ const createChannelSchema = z.object({
   name: z.string().min(1),
   type: z.enum(["PUBLIC", "PRIVATE"]),
   workspaceId: z.string(),
+  groupId: z.string().optional(),
   image: z.string().optional(),
   description: z.string().trim().max(2000).optional()
 });
@@ -121,14 +122,23 @@ async function buildChannelDetailPayload(channelId: string, userId: string) {
     }
   });
 
-  // Shared / collab channels: if the link is no longer ACTIVE, only host-workspace members
-  // may open the channel (external collaborators lose access after revoke).
+  // Shared / collab channels: if the link/group is no longer ACTIVE, only host-workspace
+  // members may open the channel (external collaborators lose access after revoke).
   if (channel.collaborationId) {
     const activeCollab = await prisma.workspaceCollaboration.findFirst({
       where: { id: channel.collaborationId, status: "ACTIVE" },
       select: { id: true },
     });
     if (!activeCollab && !workspaceMembership) {
+      return { channel, isMember: false } as const;
+    }
+  }
+  if ((channel as any).groupId) {
+    const activeGroup = await prisma.collaborationGroup.findFirst({
+      where: { id: (channel as any).groupId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (!activeGroup && !workspaceMembership) {
       return { channel, isMember: false } as const;
     }
   }
@@ -326,12 +336,37 @@ export const createChannel = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 
+    if (payload.groupId) {
+      const group = await prisma.collaborationGroup.findFirst({
+        where: { id: payload.groupId, status: "ACTIVE" },
+        include: {
+          policy: {
+            select: { allowSharedChannels: true },
+          },
+          memberships: {
+            where: { workspaceId: payload.workspaceId, status: "ACTIVE" },
+            select: { id: true },
+          },
+        },
+      });
+      if (!group) {
+        return res.status(404).json({ message: "Collaboration group not found" });
+      }
+      if (!group.policy.allowSharedChannels) {
+        return res.status(403).json({ message: "Shared channels are disabled by group policy" });
+      }
+      if (group.memberships.length === 0) {
+        return res.status(403).json({ message: "Workspace is not an active member of this group" });
+      }
+    }
+
     const channel = await prisma.channel.create({
       data: {
         name: payload.name,
         description: normalizeOptionalText(payload.description),
         type: payload.type,
         workspaceId: payload.workspaceId,
+        groupId: payload.groupId ?? undefined,
         image: payload.image,
         channelAdminId: user.id,
         members: {
@@ -400,18 +435,36 @@ export const getWorkspaceChannels = async (req: Request, res: Response) => {
             AND: [
               { workspaceId: workspaceId },
               {
-                OR: [{ collaborationId: null }, { collaboration: { status: "ACTIVE" } }],
+                OR: [
+                  { collaborationId: null, groupId: null },
+                  { collaboration: { status: "ACTIVE" } },
+                  { group: { status: "ACTIVE" } },
+                ],
               },
             ],
           },
           {
             AND: [
               { workspaceId: { not: workspaceId } },
-              {
-                collaboration: {
-                  status: "ACTIVE",
-                  OR: [{ workspaceAId: workspaceId }, { workspaceBId: workspaceId }],
-                },
+              { OR: [
+                  {
+                    collaboration: {
+                      status: "ACTIVE",
+                      OR: [{ workspaceAId: workspaceId }, { workspaceBId: workspaceId }],
+                    },
+                  },
+                  {
+                    group: {
+                      status: "ACTIVE",
+                      memberships: {
+                        some: {
+                          workspaceId,
+                          status: "ACTIVE",
+                        },
+                      },
+                    },
+                  },
+                ],
               },
             ],
           },
@@ -459,7 +512,7 @@ export const getChannel = async (req: Request, res: Response) => {
       }
     });
 
-    if (!member && !channel.isBridgeChannel && !channel.collaborationId) {
+    if (!member && !channel.isBridgeChannel && !channel.collaborationId && !(channel as any).groupId) {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 
@@ -592,7 +645,7 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
     }
 
     // Bridge/shared collaboration channels can include members from linked workspaces.
-    if (channel.isBridgeChannel || !!channel.collaborationId) {
+    if (channel.isBridgeChannel || !!channel.collaborationId || !!(channel as any).groupId) {
       const requestingChannelMember = await prisma.channelMember.findFirst({
         where: { userId: user.id, channelId: channel.id, isActive: true }
       });
@@ -602,7 +655,7 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
 
       const targetChannel = await prisma.channel.findFirst({
         where: { id: channel.id },
-        select: { collaborationId: true, workspaceId: true, channelAdminId: true },
+        select: { collaborationId: true, groupId: true, workspaceId: true, channelAdminId: true },
       });
       if (!targetChannel) {
         return res.status(404).json({ message: "Channel not found" });
@@ -612,29 +665,36 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
       const isChannelCreator = targetChannel.channelAdminId === user.id;
       const isSourceWorkspaceAdmin = await isWorkspaceAdmin(user.id, sourceWorkspaceId);
 
-      let counterpartWorkspaceId: string | null = null;
       let isCounterpartWorkspaceAdmin = false;
       let policyAllowsSharedChannels = false;
-      if (targetChannel.collaborationId) {
+      let candidateWorkspaceIds: string[] = [sourceWorkspaceId];
+
+      if (targetChannel.groupId) {
+        // Group channel: all ACTIVE member workspaces are candidates
+        const groupMemberships = await prisma.collaborationGroupMembership.findMany({
+          where: { groupId: targetChannel.groupId, status: "ACTIVE" },
+          select: { workspaceId: true },
+        });
+        candidateWorkspaceIds = groupMemberships.map((m) => m.workspaceId);
+        // Check if caller is an admin in any member workspace
+        const adminChecks = await Promise.all(
+          candidateWorkspaceIds.map((wsId) => isWorkspaceAdmin(user.id, wsId))
+        );
+        isCounterpartWorkspaceAdmin = adminChecks.some(Boolean);
+        policyAllowsSharedChannels = true; // policy was checked at group channel creation
+      } else if (targetChannel.collaborationId) {
         const collaboration = await prisma.workspaceCollaboration.findFirst({
           where: { id: targetChannel.collaborationId, status: "ACTIVE" },
-          include: {
-            policy: {
-              select: {
-                allowSharedChannels: true,
-              },
-            },
-          },
+          include: { policy: { select: { allowSharedChannels: true } } },
         });
         if (collaboration) {
-          counterpartWorkspaceId =
+          const counterpartWorkspaceId =
             collaboration.workspaceAId === sourceWorkspaceId
               ? collaboration.workspaceBId
               : collaboration.workspaceAId;
-          isCounterpartWorkspaceAdmin = counterpartWorkspaceId
-            ? await isWorkspaceAdmin(user.id, counterpartWorkspaceId)
-            : false;
+          isCounterpartWorkspaceAdmin = await isWorkspaceAdmin(user.id, counterpartWorkspaceId);
           policyAllowsSharedChannels = collaboration.policy.allowSharedChannels;
+          candidateWorkspaceIds = [sourceWorkspaceId, counterpartWorkspaceId];
         }
       }
 
@@ -648,10 +708,6 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
       if (targetChannel.collaborationId && !policyAllowsSharedChannels) {
         return res.status(403).json({ message: "Shared channels are disabled by collaboration policy" });
       }
-
-      const candidateWorkspaceIds = [sourceWorkspaceId, counterpartWorkspaceId].filter(
-        (workspaceId): workspaceId is string => Boolean(workspaceId)
-      );
 
       const targetMemberships = await prisma.member.findMany({
         where: {

@@ -14,6 +14,7 @@ import { buildForwardedContent } from "./message.controller.js";
 import { htmlToCleanText } from "../libs/htmlToCleanText.js";
 import {
   findActiveCollaborationBetweenWorkspaces,
+  findActiveGroupContainingBothWorkspaces,
   isCollaborationDmMutationAllowedForConversation,
   canUserReadConversationHistory,
 } from "../helpers/collaborationAccess.js";
@@ -88,6 +89,7 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
     const targetInSourceWorkspace = targetWorkspaceIds.includes(workspaceId);
 
     let collaborationId: string | null = null;
+    let groupId: string | null = null;
     if (!targetInSourceWorkspace) {
       for (const targetWorkspaceId of targetWorkspaceIds) {
         const collaboration = await findActiveCollaborationBetweenWorkspaces(workspaceId, targetWorkspaceId);
@@ -96,9 +98,20 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
           break;
         }
       }
+
+      // If there is no pairwise DM link, fall back to an active group that includes both workspaces.
+      if (!collaborationId) {
+        for (const targetWorkspaceId of targetWorkspaceIds) {
+          const group = await findActiveGroupContainingBothWorkspaces(workspaceId, targetWorkspaceId);
+          if (group?.policy.allowCrossWorkspaceDm) {
+            groupId = group.id;
+            break;
+          }
+        }
+      }
     }
 
-    if (!targetInSourceWorkspace && !collaborationId) {
+    if (!targetInSourceWorkspace && !collaborationId && !groupId) {
       return res.status(403).json({ message: "Target user is not eligible for cross-workspace DM" });
     }
 
@@ -109,6 +122,28 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
       collaborationId
         ? {
             collaborationId,
+            AND: [
+              {
+                participants: {
+                  some: {
+                    userId: user.id,
+                    isActive: true,
+                  },
+                },
+              },
+              {
+                participants: {
+                  some: {
+                    userId: targetUserId,
+                    isActive: true,
+                  },
+                },
+              },
+            ],
+          }
+        : groupId
+        ? {
+            groupId,
             AND: [
               {
                 participants: {
@@ -217,6 +252,7 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
       data: {
         workspaceId: workspaceId, // Associate with source workspace
         collaborationId: collaborationId ?? undefined,
+        groupId: groupId ?? undefined,
         participants: {
           create: [
             { userId: user.id, isActive: true },
@@ -808,8 +844,15 @@ export const sendDirectMessageWithAttachments = async (req: Request, res: Respon
     // Check if user can send attachments (enabled for workspace, or user is admin/moderator)
     const canSendAttachments = await canUserSendAttachmentsToConversation(conversationId, user.id);
     if (!canSendAttachments) {
+      const conversationScope = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { groupId: true, collaborationId: true },
+      });
+      const isNetworkConversation = Boolean(conversationScope?.groupId);
       return res.status(403).json({ 
-        message: "File attachments are disabled for this conversation" 
+        message: isNetworkConversation
+          ? "File uploads are disabled for your workspace in this network conversation."
+          : "File uploads are disabled for this conversation."
       });
     }
 

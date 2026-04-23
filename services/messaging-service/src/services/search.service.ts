@@ -68,23 +68,44 @@ export interface SearchResults {
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 
-/** Counterpart workspaces for global search (people + public channels) when collab allows discovery. */
-async function getCollaborationSearchWorkspaceIds(
+/** Counterpart workspaces for global search (people + public channels) when discovery is allowed. */
+async function getDiscoverySearchWorkspaceIds(
   userMemberWorkspaceIds: string[]
 ): Promise<string[]> {
   if (userMemberWorkspaceIds.length === 0) return [];
-  const links = await prisma.workspaceCollaboration.findMany({
-    where: {
-      status: 'ACTIVE',
-      OR: [
-        { workspaceAId: { in: userMemberWorkspaceIds } },
-        { workspaceBId: { in: userMemberWorkspaceIds } },
-      ],
-    },
-    include: {
-      policy: { select: { allowExternalDiscovery: true } },
-    },
-  });
+
+  const [links, groupMemberships] = await Promise.all([
+    prisma.workspaceCollaboration.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [
+          { workspaceAId: { in: userMemberWorkspaceIds } },
+          { workspaceBId: { in: userMemberWorkspaceIds } },
+        ],
+      },
+      include: {
+        policy: { select: { allowExternalDiscovery: true } },
+      },
+    }),
+    prisma.collaborationGroupMembership.findMany({
+      where: {
+        workspaceId: { in: userMemberWorkspaceIds },
+        status: 'ACTIVE',
+        group: { status: 'ACTIVE', policy: { allowExternalDiscovery: true } },
+      },
+      include: {
+        group: {
+          include: {
+            memberships: {
+              where: { status: 'ACTIVE' },
+              select: { workspaceId: true },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+
   const extra = new Set<string>();
   for (const link of links) {
     if (!link.policy.allowExternalDiscovery) continue;
@@ -95,6 +116,15 @@ async function getCollaborationSearchWorkspaceIds(
       extra.add(link.workspaceAId);
     }
   }
+
+  for (const gm of groupMemberships) {
+    for (const member of gm.group.memberships) {
+      if (!userMemberWorkspaceIds.includes(member.workspaceId)) {
+        extra.add(member.workspaceId);
+      }
+    }
+  }
+
   return [...extra];
 }
 
@@ -181,7 +211,7 @@ export async function performSearch(
     return emptyResults(q, Date.now() - start);
   }
 
-  const collaboratorWorkspaceIds = await getCollaborationSearchWorkspaceIds(workspaceIds);
+  const collaboratorWorkspaceIds = await getDiscoverySearchWorkspaceIds(workspaceIds);
   const searchWorkspaceIds = [...new Set([...workspaceIds, ...collaboratorWorkspaceIds])];
 
   // Channels user is a member of

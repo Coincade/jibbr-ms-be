@@ -176,7 +176,7 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
     const canSendAttachments = await canUserSendAttachmentsToChannel(payload.channelId, user.id);
     if (!canSendAttachments) {
       return res.status(403).json({ 
-        message: "File attachments are disabled for this workspace" 
+        message: "File uploads are disabled for your workspace in this channel/network."
       });
     }
 

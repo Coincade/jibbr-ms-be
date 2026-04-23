@@ -55,6 +55,55 @@ export const isFileAttachmentsEnabled = async (workspaceId: string): Promise<boo
 }
 
 /**
+ * Resolve sender's "home" workspace for a group-scoped resource (channel/DM).
+ * Preference order:
+ * 1) host workspace if sender is a member there
+ * 2) first active membership among group's active workspaces
+ */
+const resolveSenderWorkspaceForGroup = async (
+    userId: string,
+    groupId: string,
+    hostWorkspaceId?: string
+) => {
+    const activeGroupMemberships = await prisma.collaborationGroupMembership.findMany({
+        where: { groupId, status: "ACTIVE" },
+        select: { workspaceId: true },
+    });
+    const groupWorkspaceIds = activeGroupMemberships.map((m) => m.workspaceId);
+    if (!groupWorkspaceIds.length) return null;
+
+    const senderMemberships = await prisma.member.findMany({
+        where: {
+            userId,
+            isActive: true,
+            workspaceId: { in: groupWorkspaceIds },
+        },
+        select: {
+            workspaceId: true,
+            role: true,
+            workspace: {
+                select: {
+                    fileAttachmentsEnabled: true,
+                },
+            },
+        },
+        orderBy: { createdAt: "asc" },
+    });
+    if (!senderMemberships.length) return null;
+
+    const preferred =
+        (hostWorkspaceId
+            ? senderMemberships.find((m) => m.workspaceId === hostWorkspaceId)
+            : null) ?? senderMemberships[0];
+
+    return {
+        workspaceId: preferred.workspaceId,
+        role: preferred.role,
+        fileAttachmentsEnabled: !!preferred.workspace.fileAttachmentsEnabled,
+    };
+}
+
+/**
  * Check if file attachments are enabled for a channel's workspace
  * @param channelId - The channel ID to check
  * @returns Promise<boolean> - True if attachments are enabled, false otherwise
@@ -68,6 +117,7 @@ export const isFileAttachmentsEnabledForChannel = async (channelId: string): Pro
             },
             select: {
                 collaborationId: true,
+                groupId: true,
                 workspace: {
                     select: {
                         fileAttachmentsEnabled: true,
@@ -83,6 +133,16 @@ export const isFileAttachmentsEnabledForChannel = async (channelId: string): Pro
                         status: true,
                     },
                 },
+                group: {
+                    select: {
+                        status: true,
+                        policy: {
+                            select: {
+                                allowFileSharing: true,
+                            },
+                        },
+                    },
+                },
             },
         });
 
@@ -94,6 +154,16 @@ export const isFileAttachmentsEnabledForChannel = async (channelId: string): Pro
                 !!channel.collaboration.policy?.allowFileSharing &&
                 !!channel.workspace?.fileAttachmentsEnabled
             );
+        }
+
+        // Group channels: global availability is policy + host-workspace toggle.
+        // Per-sender checks are enforced in canUserSendAttachmentsToChannel().
+        if (channel?.groupId) {
+            return (
+                channel.group?.status === "ACTIVE" &&
+                !!channel.group.policy?.allowFileSharing &&
+                !!channel.workspace?.fileAttachmentsEnabled
+            ) ?? false;
         }
 
         return channel?.workspace?.fileAttachmentsEnabled ?? true; // Default to true if channel/workspace not found
@@ -117,8 +187,15 @@ export const canUserSendAttachmentsToChannel = async (channelId: string, userId:
             select: {
                 workspaceId: true,
                 collaborationId: true,
+                groupId: true,
                 workspace: { select: { fileAttachmentsEnabled: true } },
                 collaboration: {
+                    select: {
+                        status: true,
+                        policy: { select: { allowFileSharing: true } },
+                    },
+                },
+                group: {
                     select: {
                         status: true,
                         policy: { select: { allowFileSharing: true } },
@@ -127,6 +204,23 @@ export const canUserSendAttachmentsToChannel = async (channelId: string, userId:
             },
         });
         if (!channel) return true;
+
+        if (channel.groupId) {
+            const policyOk =
+                channel.group?.status === "ACTIVE" &&
+                channel.group.policy.allowFileSharing;
+            if (!policyOk) return false;
+
+            const senderWorkspace = await resolveSenderWorkspaceForGroup(
+                userId,
+                channel.groupId,
+                channel.workspaceId
+            );
+            if (!senderWorkspace) return false;
+
+            // Group rule: sender workspace toggle decides upload permission.
+            return senderWorkspace.fileAttachmentsEnabled;
+        }
 
         if (channel.collaborationId) {
             const policyOk =
@@ -167,6 +261,8 @@ export const isFileAttachmentsEnabledForConversation = async (conversationId: st
             },
             select: {
                 collaborationId: true,
+                groupId: true,
+                workspaceId: true,
                 workspace: {
                     select: {
                         fileAttachmentsEnabled: true,
@@ -192,8 +288,26 @@ export const isFileAttachmentsEnabledForConversation = async (conversationId: st
                         },
                     },
                 },
+                group: {
+                    select: {
+                        status: true,
+                        policy: {
+                            select: {
+                                allowFileSharing: true,
+                            },
+                        },
+                    },
+                },
             },
         });
+
+        if (conversation?.groupId) {
+            return (
+                conversation.group?.status === "ACTIVE" &&
+                !!conversation.group.policy.allowFileSharing &&
+                !!conversation.workspace?.fileAttachmentsEnabled
+            ) ?? false;
+        }
 
         if (conversation?.collaborationId) {
             return (
@@ -225,6 +339,7 @@ export const canUserSendAttachmentsToConversation = async (conversationId: strin
             select: {
                 workspaceId: true,
                 collaborationId: true,
+                groupId: true,
                 workspace: { select: { fileAttachmentsEnabled: true } },
                 collaboration: {
                     select: {
@@ -234,9 +349,32 @@ export const canUserSendAttachmentsToConversation = async (conversationId: strin
                         workspaceB: { select: { fileAttachmentsEnabled: true } },
                     },
                 },
+                group: {
+                    select: {
+                        status: true,
+                        policy: { select: { allowFileSharing: true } },
+                    },
+                },
             },
         });
         if (!conversation) return true;
+
+        if (conversation.groupId) {
+            const policyOk =
+                conversation.group?.status === "ACTIVE" &&
+                conversation.group.policy.allowFileSharing;
+            if (!policyOk) return false;
+
+            const senderWorkspace = await resolveSenderWorkspaceForGroup(
+                userId,
+                conversation.groupId,
+                conversation.workspaceId
+            );
+            if (!senderWorkspace) return false;
+
+            // Group rule: sender workspace toggle decides upload permission.
+            return senderWorkspace.fileAttachmentsEnabled;
+        }
 
         if (conversation.collaborationId) {
             return (
