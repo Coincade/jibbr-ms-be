@@ -1,5 +1,5 @@
 import { Socket, ChannelClientsMap, AddReactionMessage, RemoveReactionMessage } from '../types.js';
-import { validateChannelMembership } from '../utils.js';
+import { assertCanMutateSharedChannel, validateChannelMembership } from '../utils.js';
 
 /**
  * Handle add reaction event
@@ -20,6 +20,8 @@ export const handleAddReaction = async (
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
+
+    await assertCanMutateSharedChannel(currentUserId, data.channelId!);
 
     // Add reaction to database
     const { default: prisma } = await import('../../config/database.js');
@@ -127,6 +129,8 @@ export const handleRemoveReaction = async (
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
+
+    await assertCanMutateSharedChannel(currentUserId, data.channelId!);
 
     // Remove reaction from database
     const { default: prisma } = await import('../../config/database.js');

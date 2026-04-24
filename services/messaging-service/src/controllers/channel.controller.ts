@@ -133,9 +133,9 @@ async function buildChannelDetailPayload(channelId: string, userId: string) {
       return { channel, isMember: false } as const;
     }
   }
-  if ((channel as any).groupId) {
+  if (channel.groupId) {
     const activeGroup = await prisma.collaborationGroup.findFirst({
-      where: { id: (channel as any).groupId, status: "ACTIVE" },
+      where: { id: channel.groupId, status: "ACTIVE" },
       select: { id: true },
     });
     if (!activeGroup && !workspaceMembership) {
@@ -161,6 +161,54 @@ async function buildChannelDetailPayload(channelId: string, userId: string) {
     : [];
 
   const roleByUserId = new Map(workspaceMembers.map((member) => [member.userId, member.role]));
+
+  /** For shared / network channels: resolve each external member's home workspace display name (not the host workspace). */
+  const memberWorkspaceNameByUserId = new Map<string, string>();
+  const hostWorkspaceId = channel.workspaceId;
+  const isFederatedChannel = Boolean(channel.collaborationId || channel.groupId);
+  if (isFederatedChannel) {
+    let federatedWorkspaceIds: string[] = [];
+    if (channel.collaborationId) {
+      const collab = await prisma.workspaceCollaboration.findFirst({
+        where: { id: channel.collaborationId, status: "ACTIVE" },
+        select: { workspaceAId: true, workspaceBId: true },
+      });
+      if (collab) {
+        federatedWorkspaceIds = [collab.workspaceAId, collab.workspaceBId];
+      }
+    } else if (channel.groupId) {
+      const groupMemberships = await prisma.collaborationGroupMembership.findMany({
+        where: { groupId: channel.groupId, status: "ACTIVE" },
+        select: { workspaceId: true },
+      });
+      federatedWorkspaceIds = [...new Set(groupMemberships.map((m) => m.workspaceId))];
+    }
+
+    const externalUserIds = channel.members.filter((m) => m.isExternal).map((m) => m.userId);
+    if (federatedWorkspaceIds.length > 0 && externalUserIds.length > 0) {
+      const homeMemberships = await prisma.member.findMany({
+        where: {
+          userId: { in: externalUserIds },
+          workspaceId: { in: federatedWorkspaceIds },
+          isActive: true,
+        },
+        select: {
+          userId: true,
+          workspaceId: true,
+          workspace: { select: { name: true } },
+        },
+      });
+      for (const uid of externalUserIds) {
+        const candidates = homeMemberships.filter((m) => m.userId === uid);
+        const nonHost = candidates.find((c) => c.workspaceId !== hostWorkspaceId);
+        const chosen = nonHost ?? candidates[0];
+        const name = chosen?.workspace?.name?.trim();
+        if (name) {
+          memberWorkspaceNameByUserId.set(uid, name);
+        }
+      }
+    }
+  }
 
   const attachmentMessages = await prisma.message.findMany({
     where: {
@@ -302,7 +350,11 @@ async function buildChannelDetailPayload(channelId: string, userId: string) {
       members: channel.members.map((member) => ({
         ...member,
         workspaceRole: roleByUserId.get(member.userId) ?? null,
-        isChannelCreator: member.userId === channel.channelAdminId
+        isChannelCreator: member.userId === channel.channelAdminId,
+        memberWorkspaceName:
+          member.isExternal && isFederatedChannel
+            ? memberWorkspaceNameByUserId.get(member.userId) ?? null
+            : null,
       })),
       preview: {
         media,
@@ -512,7 +564,7 @@ export const getChannel = async (req: Request, res: Response) => {
       }
     });
 
-    if (!member && !channel.isBridgeChannel && !channel.collaborationId && !(channel as any).groupId) {
+    if (!member && !channel.isBridgeChannel && !channel.collaborationId && !channel.groupId) {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 

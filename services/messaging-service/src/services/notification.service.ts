@@ -1,3 +1,4 @@
+import { filterUserIdsWhoCanReadChannel } from "@jibbr/database";
 import prisma from "../config/database.js";
 import PushService from "./push.service.js";
 import { shouldNotify, type NotificationPrefsRaw } from "@jibbr/shared-utils";
@@ -181,7 +182,17 @@ export class NotificationService {
 
       const mutedUserIds = await NotificationService.getMutedUserIdsForChannel(channelId);
 
+      const allowedRecipients = await filterUserIdsWhoCanReadChannel(
+        prisma,
+        channelId,
+        channelMembers.map((m) => m.userId)
+      );
+
       for (const member of channelMembers) {
+        if (!allowedRecipients.has(member.userId)) {
+          continue;
+        }
+
         await this.incrementChannelUnreadCount(channelId, member.userId);
 
         if (mutedUserIds.has(member.userId)) continue;

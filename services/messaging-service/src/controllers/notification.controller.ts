@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { filterUnreadChannelRowsForUser } from "@jibbr/database";
 import { formatError } from "../helper.js";
 import prisma from "../config/database.js";
 import { ZodError } from "zod";
@@ -234,6 +235,9 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
           select: {
             name: true,
             workspaceId: true,
+            collaborationId: true,
+            groupId: true,
+            deletedAt: true,
           },
         },
       },
@@ -278,15 +282,21 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
       },
     });
 
+    const accessibleChannelUnreads = await filterUnreadChannelRowsForUser(
+      prisma,
+      user.id,
+      channelUnreadCounts
+    );
+
     // Calculate total unread count
-    const totalUnread = channelUnreadCounts.reduce((sum, item) => sum + item.unreadCount, 0) +
+    const totalUnread = accessibleChannelUnreads.reduce((sum, item) => sum + item.unreadCount, 0) +
                        conversationUnreadCounts.reduce((sum, item) => sum + item.unreadCount, 0);
 
     return res.status(200).json({
       message: "Unread counts fetched successfully",
       data: {
         totalUnread,
-        channels: channelUnreadCounts.map(item => ({
+        channels: accessibleChannelUnreads.map(item => ({
           channelId: item.channelId,
           channelName: item.channel.name,
           workspaceId: item.channel.workspaceId,

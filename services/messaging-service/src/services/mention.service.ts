@@ -1,4 +1,5 @@
 // [mentions] Service for processing mentions in messages
+import { canUserReadChannelHistory } from '@jibbr/database';
 import prisma from '../config/database.js';
 import { parseMentions } from '../libs/tiptapMentionParser.js';
 import { sanitizeMessageHtml } from '../libs/sanitizeHtml.js';
@@ -198,6 +199,11 @@ export async function createMentionsAndNotifications(
 
   for (const user of usersWithPrefs) {
     if (channelId && mutedUserIds.has(user.id)) continue;
+
+    if (channelId) {
+      const canAccess = await canUserReadChannelHistory(prisma, channelId, user.id);
+      if (!canAccess) continue;
+    }
 
     const prefs: NotificationPrefsRaw | null = user.notificationPreferences
       ? { ...user.notificationPreferences, timezone: user.timezone ?? undefined }

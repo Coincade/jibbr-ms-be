@@ -1,6 +1,14 @@
+import {
+  canUserMutateSharedChannel as canUserMutateSharedChannelDb,
+  canUserReadChannelHistory as canUserReadChannelHistoryDb,
+  isCollaborationDmMutationAllowedForConversation as isCollaborationDmMutationAllowedDb,
+} from "@jibbr/database";
 import prisma from "../config/database.js";
 
 export type CollaborationResourceType = "workspace" | "channel" | "conversation" | "message";
+
+export const canUserMutateSharedChannel = (userId: string, channelId: string) =>
+  canUserMutateSharedChannelDb(prisma, userId, channelId);
 
 const isAdminRole = (role?: string | null) => role === "ADMIN";
 
@@ -192,35 +200,8 @@ export const canAccessWorkspaceResource = async (
  * Same-workspace DMs (no collaborationId) are always allowed.
  * Cross-workspace DMs require an ACTIVE link and allowCrossWorkspaceDm on the policy.
  */
-export const isCollaborationDmMutationAllowedForConversation = async (
-  conversationId: string
-): Promise<boolean> => {
-  const conv = await prisma.conversation.findUnique({
-    where: { id: conversationId },
-    select: { collaborationId: true, groupId: true },
-  });
-  if (!conv) return false;
-
-  // Pairwise collaboration DM
-  if (conv.collaborationId) {
-    const link = await prisma.workspaceCollaboration.findFirst({
-      where: { id: conv.collaborationId, status: "ACTIVE" },
-      include: { policy: { select: { allowCrossWorkspaceDm: true } } },
-    });
-    return !!(link?.policy.allowCrossWorkspaceDm);
-  }
-
-  // Group DM
-  if (conv.groupId) {
-    const group = await prisma.collaborationGroup.findFirst({
-      where: { id: conv.groupId, status: "ACTIVE" },
-      include: { policy: { select: { allowCrossWorkspaceDm: true } } },
-    });
-    return !!(group?.policy.allowCrossWorkspaceDm);
-  }
-
-  return true;
-};
+export const isCollaborationDmMutationAllowedForConversation = (conversationId: string) =>
+  isCollaborationDmMutationAllowedDb(prisma, conversationId);
 
 /**
  * Whether the collaboration link is ACTIVE and its policy allows file sharing.
@@ -252,48 +233,8 @@ export const isCollaborationFileSharingAllowed = async (
  * - Shared channels with ACTIVE link: channel member can read.
  * - Shared channels with revoked/inactive link: only host-workspace members can read.
  */
-export const canUserReadChannelHistory = async (
-  channelId: string,
-  userId: string
-): Promise<boolean> => {
-  const [channelMember, channel] = await Promise.all([
-    prisma.channelMember.findFirst({
-      where: { channelId, userId, isActive: true },
-      select: { id: true },
-    }),
-    prisma.channel.findUnique({
-      where: { id: channelId },
-      select: { workspaceId: true, collaborationId: true, groupId: true },
-    }),
-  ]);
-
-  if (!channel || !channelMember) return false;
-  if (!channel.collaborationId && !channel.groupId) return true;
-
-  // Pairwise shared channel
-  if (channel.collaborationId) {
-    const activeLink = await prisma.workspaceCollaboration.findFirst({
-      where: { id: channel.collaborationId, status: "ACTIVE" },
-      select: { id: true },
-    });
-    if (activeLink) return true;
-  }
-
-  // Group shared channel
-  if (channel.groupId) {
-    const activeGroup = await prisma.collaborationGroup.findFirst({
-      where: { id: channel.groupId, status: "ACTIVE" },
-      select: { id: true },
-    });
-    if (activeGroup) return true;
-  }
-
-  const hostWorkspaceMember = await prisma.member.findFirst({
-    where: { userId, workspaceId: channel.workspaceId, isActive: true },
-    select: { id: true },
-  });
-  return !!hostWorkspaceMember;
-};
+export const canUserReadChannelHistory = (channelId: string, userId: string) =>
+  canUserReadChannelHistoryDb(prisma, channelId, userId);
 
 /**
  * Read access semantics for DM history:

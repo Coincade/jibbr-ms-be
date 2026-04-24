@@ -4,6 +4,7 @@ import { Prisma } from "@jibbr/database";
 import prisma from "../config/database.js";
 import { formatError } from "../helper.js";
 import { isWorkspaceAdmin } from "../helpers/collaborationAccess.js";
+import { cleanupGroupMembershipArtifacts } from "../helpers/collaborationRevokeCleanup.js";
 import {
   publishChannelEvent,
   publishCollaborationInvalidate,
@@ -390,7 +391,11 @@ export const revokeGroupMembership = async (req: Request, res: Response) => {
     const user = req.user;
     if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    const { id: groupId, workspaceId: targetWorkspaceId } = req.params;
+    const groupId = req.params.id?.trim();
+    const targetWorkspaceId = req.params.workspaceId?.trim();
+    if (!groupId || !targetWorkspaceId) {
+      return res.status(400).json({ message: "Invalid group or workspace id" });
+    }
 
     const ownerMembership = await prisma.collaborationGroupMembership.findFirst({
       where: { groupId, role: "OWNER", status: "ACTIVE" },
@@ -415,9 +420,19 @@ export const revokeGroupMembership = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Active membership not found" });
     }
 
-    const updated = await prisma.collaborationGroupMembership.update({
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.collaborationGroupMembership.update({
+          where: { id: membership.id },
+          data: { status: "REVOKED", respondedAt: new Date() },
+        });
+        await cleanupGroupMembershipArtifacts(tx, groupId, targetWorkspaceId);
+      },
+      { maxWait: 10_000, timeout: 60_000 }
+    );
+
+    const updated = await prisma.collaborationGroupMembership.findUniqueOrThrow({
       where: { id: membership.id },
-      data: { status: "REVOKED", respondedAt: new Date() },
     });
 
     await writeAudit(groupId, user.id, "WORKSPACE_REMOVED", { removedWorkspaceId: targetWorkspaceId });
@@ -448,6 +463,7 @@ export const revokeGroupMembership = async (req: Request, res: Response) => {
 
     return res.status(200).json({ message: "Workspace removed from group", data: updated });
   } catch (error) {
+    console.error("[revokeGroupMembership]", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 };

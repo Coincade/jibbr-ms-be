@@ -8,6 +8,7 @@ import {
   findActiveCollaborationBetweenWorkspaces,
   isWorkspaceAdmin,
 } from "../helpers/collaborationAccess.js";
+import { cleanupPairwiseCollaborationArtifacts } from "../helpers/collaborationRevokeCleanup.js";
 import {
   publishChannelEvent,
   publishCollaborationInvalidate,
@@ -465,18 +466,26 @@ export const revokeCollaborationLink = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "Only admins of linked workspaces can revoke this collaboration" });
     }
 
-    const updated = await prisma.workspaceCollaboration.update({
-      where: { id: link.id },
-      data: {
-        status: "REVOKED",
-        revokedAt: new Date(),
-        revokedByUserId: user.id,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.workspaceCollaboration.update({
+        where: { id: link.id },
+        data: {
+          status: "REVOKED",
+          revokedAt: new Date(),
+          revokedByUserId: user.id,
+        },
+      });
+
+      await tx.workspaceCollaborationRequest.updateMany({
+        where: { collaborationId: link.id, status: "ACCEPTED" },
+        data: { status: "REVOKED", respondedAt: new Date(), respondedByUserId: user.id },
+      });
+
+      await cleanupPairwiseCollaborationArtifacts(tx, link.id);
     });
 
-    await prisma.workspaceCollaborationRequest.updateMany({
-      where: { collaborationId: link.id, status: "ACCEPTED" },
-      data: { status: "REVOKED", respondedAt: new Date(), respondedByUserId: user.id },
+    const updated = await prisma.workspaceCollaboration.findUniqueOrThrow({
+      where: { id: link.id },
     });
 
     await writeAudit(link.id, user.id, "COLLABORATION_REVOKED", {});

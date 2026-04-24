@@ -39,7 +39,10 @@ export interface SearchResults {
     username: string;
     avatar: string;
     display_name?: string;
+    name?: string;
     status?: string;
+    /** Home workspace(s) when the person is from a linked collab / network workspace (not the viewer's org). */
+    workspace_name?: string;
   }>;
   files: Array<{
     id: string;
@@ -305,7 +308,7 @@ export async function performSearch(
   const [messagesRes, channelsRes, usersRes, filesRes] = await Promise.all([
     searchMessages(messageWhere, searchTerm, limit, offset),
     searchChannels(searchWorkspaceIds, searchTerm, joinedChannelIds, allChannelsInWorkspaces),
-    searchUsers(searchWorkspaceIds, searchTerm, userId),
+    searchUsers(searchWorkspaceIds, searchTerm, userId, workspaceIds),
     searchFiles(messageWhere, searchTerm, limit),
   ]);
 
@@ -446,8 +449,11 @@ async function searchChannels(
 async function searchUsers(
   workspaceIds: string[],
   searchTerm: string | null,
-  excludeUserId: string
+  excludeUserId: string,
+  /** Workspaces the searching user belongs to — used to label people from partner orgs. */
+  viewerWorkspaceIds: string[]
 ): Promise<{ users: SearchResults['users']; total: number }> {
+  const viewerWorkspaceSet = new Set(viewerWorkspaceIds);
   const members = await prisma.member.findMany({
     where: {
       workspaceId: { in: workspaceIds },
@@ -464,15 +470,30 @@ async function searchUsers(
           presenceStatus: true,
         },
       },
+      workspace: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
     },
   });
 
   const term = searchTerm?.replace(/%/g, '') ?? '';
   const userById = new Map<string, NonNullable<(typeof members)[0]['user']>>();
+  const externalWorkspaceNamesByUserId = new Map<string, Set<string>>();
   for (const m of members) {
     const u = m.user;
     if (!u) continue;
     if (!userById.has(u.id)) userById.set(u.id, u);
+    if (!viewerWorkspaceSet.has(m.workspaceId) && m.workspace?.name?.trim()) {
+      let set = externalWorkspaceNamesByUserId.get(u.id);
+      if (!set) {
+        set = new Set();
+        externalWorkspaceNamesByUserId.set(u.id, set);
+      }
+      set.add(m.workspace.name.trim());
+    }
   }
   let users = Array.from(userById.values());
   if (term) {
@@ -492,14 +513,24 @@ async function searchUsers(
     .sort((a, b) => b.score - a.score);
 
   const total = scored.length;
-  const top = scored.slice(0, USERS_QUOTA).map((s) => ({
-    id: s.item.id,
-    username: s.item.email?.split('@')[0] ?? s.item.name ?? '',
-    avatar: s.item.image ?? '',
-    display_name: s.item.name ?? undefined,
-    name: s.item.name ?? undefined,
-    status: s.item.presenceStatus?.toLowerCase() ?? undefined,
-  }));
+  const top = scored.slice(0, USERS_QUOTA).map((s) => {
+    const extSet = externalWorkspaceNamesByUserId.get(s.item.id);
+    const workspaceLabels = extSet
+      ? Array.from(extSet)
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b))
+      : [];
+    const workspace_name = workspaceLabels.length > 0 ? workspaceLabels.join(' · ') : undefined;
+    return {
+      id: s.item.id,
+      username: s.item.email?.split('@')[0] ?? s.item.name ?? '',
+      avatar: s.item.image ?? '',
+      display_name: s.item.name ?? undefined,
+      name: s.item.name ?? undefined,
+      status: s.item.presenceStatus?.toLowerCase() ?? undefined,
+      workspace_name,
+    };
+  });
 
   return { users: top, total };
 }

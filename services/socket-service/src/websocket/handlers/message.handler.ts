@@ -1,5 +1,11 @@
 import { Socket, ChannelClientsMap, SendMessageMessage, EditMessageMessage, DeleteMessageMessage, ForwardMessageMessage, MessageData } from '../types.js';
-import { validateChannelMembership, validateConversationParticipation, getUserInfo } from '../utils.js';
+import {
+  assertCanMutateSharedChannel,
+  canUserReadChannelHistory,
+  validateChannelMembership,
+  validateConversationParticipation,
+  getUserInfo,
+} from '../utils.js';
 import { sendMessageSchema, updateMessageSchema } from '../../validation/message.validations.js';
 import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
@@ -42,6 +48,8 @@ export const handleSendMessage = async (
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
+
+    await assertCanMutateSharedChannel(socket.data.user.id, data.channelId!);
 
     // Check if user can send attachments (if attachments are provided)
     if (data.attachments && data.attachments.length > 0) {
@@ -147,8 +155,8 @@ export const handleSendMessage = async (
         throw new Error('Original message not found or has been deleted');
       }
       if (originalMessage.channelId) {
-        const isSourceMember = await validateChannelMembership(socket.data.user.id, originalMessage.channelId);
-        if (!isSourceMember) {
+        const canReadSource = await canUserReadChannelHistory(originalMessage.channelId, socket.data.user.id);
+        if (!canReadSource) {
           throw new Error('You do not have access to the original message');
         }
       } else if (originalMessage.conversationId) {
@@ -432,6 +440,8 @@ export const handleEditMessage = async (
       throw new Error('You are not a member of this channel');
     }
 
+    await assertCanMutateSharedChannel(socket.data.user.id, data.channelId!);
+
     // Update message in database
     const { default: prisma } = await import('../../config/database.js');
     const message = await prisma.message.findUnique({
@@ -530,6 +540,8 @@ export const handleDeleteMessage = async (
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
+
+    await assertCanMutateSharedChannel(socket.data.user.id, data.channelId!);
 
     // Soft delete message from database
     const { default: prisma } = await import('../../config/database.js');
@@ -650,8 +662,8 @@ export const handleForwardMessage = async (
 
     // Validate user has access to the original message (channel or DM)
     if (originalMessage.channelId) {
-      const isSourceMember = await validateChannelMembership(socket.data.user.id, originalMessage.channelId);
-      if (!isSourceMember) {
+      const canReadSource = await canUserReadChannelHistory(originalMessage.channelId, socket.data.user.id);
+      if (!canReadSource) {
         throw new Error('You do not have access to the original message');
       }
     } else if (originalMessage.conversationId) {
@@ -670,6 +682,8 @@ export const handleForwardMessage = async (
     if (!isTargetMember) {
       throw new Error('You are not a member of the target channel');
     }
+
+    await assertCanMutateSharedChannel(socket.data.user.id, data.targetChannelId);
 
     const targetChannel = await prisma.channel.findFirst({
       where: { id: data.targetChannelId, deletedAt: null },

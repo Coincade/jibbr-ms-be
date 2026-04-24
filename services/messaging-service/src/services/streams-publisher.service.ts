@@ -189,7 +189,12 @@ export type CollaborationInvalidateReason =
   | 'link_approved'
   | 'link_revoked'
   | 'shared_channel_created'
-  | 'external_dm_created';
+  | 'external_dm_created'
+  | 'group_invite_sent'
+  | 'group_invite_accepted'
+  | 'group_invite_rejected'
+  | 'group_membership_revoked'
+  | 'group_channel_created';
 
 /**
  * Notify all members in affected workspaces to refresh collaboration-derived UI

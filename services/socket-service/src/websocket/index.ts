@@ -13,6 +13,7 @@ import {
   validateConversationParticipation,
   validateWorkspaceMembership,
   getWorkspaceRoomKey,
+  canUserReadChannelHistory,
 } from './utils.js';
 import {
   handleSendMessage,
@@ -188,6 +189,11 @@ const handleConnection = (socket: SocketLike): void => {
     const isMember = await validateChannelMembership(user.id, channelId);
     if (!isMember) {
       socket.emit('error', { message: 'You are not a member of this channel' });
+      return;
+    }
+    const canRead = await canUserReadChannelHistory(channelId, user.id);
+    if (!canRead) {
+      socket.emit('error', { message: 'You no longer have access to this channel' });
       return;
     }
     (socket.data as any).allowedChannels?.add(channelId);

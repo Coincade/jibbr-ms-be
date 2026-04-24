@@ -12,6 +12,7 @@ import {
   getUserInfo,
   validateChannelMembership,
   isCollaborationDmMutationAllowed,
+  canUserReadChannelHistory,
 } from '../utils.js';
 import {
   sendDirectMessageSchema,
@@ -169,11 +170,8 @@ export const handleSendDirectMessage = async (
         throw new Error('Original message not found or has been deleted');
       }
       if (originalMessage.channelId) {
-        const isSourceMember = await validateChannelMembership(
-          socket.data.user.id,
-          originalMessage.channelId
-        );
-        if (!isSourceMember) {
+        const canReadSource = await canUserReadChannelHistory(originalMessage.channelId, socket.data.user.id);
+        if (!canReadSource) {
           throw new Error('You do not have access to the original message');
         }
       } else if (originalMessage.conversationId) {
@@ -853,11 +851,8 @@ export const handleForwardDirectMessage = async (
     }
 
     if (originalMessage.channelId) {
-      const isSourceMember = await validateChannelMembership(
-        socket.data.user.id,
-        originalMessage.channelId
-      );
-      if (!isSourceMember) {
+      const canReadSource = await canUserReadChannelHistory(originalMessage.channelId, socket.data.user.id);
+      if (!canReadSource) {
         throw new Error('You are not a member of the source channel');
       }
     } else if (originalMessage.conversationId) {

@@ -1,5 +1,11 @@
 import { JwtPayload } from 'jsonwebtoken';
 import jwt from 'jsonwebtoken';
+import {
+  canUserMutateSharedChannel as canUserMutateSharedChannelDb,
+  canUserReadChannelHistory as canUserReadChannelHistoryDb,
+  isCollaborationDmMutationAllowedForConversation,
+} from '@jibbr/database';
+import prisma from '../config/database.js';
 import { ChannelClientsMap, ConversationClientsMap } from './types.js';
 import type { SocketLike } from './ws-compat.js';
 
@@ -151,30 +157,23 @@ export const validateConversationParticipation = async (userId: string, conversa
   }
 };
 
-/** Same rules as messaging-service isCollaborationDmMutationAllowedForConversation (cross-workspace DMs). */
+/** Same rules as messaging-service (pairwise + group cross-workspace DMs). */
 export const isCollaborationDmMutationAllowed = async (conversationId: string): Promise<boolean> => {
   try {
-    const { default: prisma } = await import('../config/database.js');
-    const conv = await prisma.conversation.findUnique({
-      where: { id: conversationId },
-      select: { collaborationId: true },
-    });
-    if (!conv) return false;
-    if (!conv.collaborationId) return true;
-
-    const link = await prisma.workspaceCollaboration.findFirst({
-      where: {
-        id: conv.collaborationId,
-        status: 'ACTIVE',
-      },
-      include: {
-        policy: { select: { allowCrossWorkspaceDm: true } },
-      },
-    });
-    return !!(link?.policy.allowCrossWorkspaceDm);
+    return isCollaborationDmMutationAllowedForConversation(prisma, conversationId);
   } catch (error) {
     console.error('Error checking collaboration DM mutation:', error);
     return false;
+  }
+};
+
+export const canUserReadChannelHistory = (channelId: string, userId: string) =>
+  canUserReadChannelHistoryDb(prisma, channelId, userId);
+
+export const assertCanMutateSharedChannel = async (userId: string, channelId: string): Promise<void> => {
+  const ok = await canUserMutateSharedChannelDb(prisma, userId, channelId);
+  if (!ok) {
+    throw new Error('Collaboration is no longer active; messaging is disabled for this channel.');
   }
 };
 

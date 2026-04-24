@@ -21,7 +21,11 @@ import {
   removeReactionSchema,
 } from "../validation/message.validations.js";
 import { ZodError } from "zod";
-import { canUserReadChannelHistory, canUserReadConversationHistory } from "../helpers/collaborationAccess.js";
+import {
+  canUserMutateSharedChannel,
+  canUserReadChannelHistory,
+  canUserReadConversationHistory,
+} from "../helpers/collaborationAccess.js";
 
 // Send a message (with optional attachments and reply)
 export const sendMessage = async (req: Request, res: Response) => {
@@ -45,6 +49,13 @@ export const sendMessage = async (req: Request, res: Response) => {
 
     if (!channelMember) {
       return res.status(403).json({ message: "You are not a member of this channel" });
+    }
+
+    const canMutate = await canUserMutateSharedChannel(user.id, payload.channelId);
+    if (!canMutate) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; you cannot send messages in this channel.",
+      });
     }
 
     // If replying, check if the original message exists
@@ -170,6 +181,13 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
 
     if (!channelMember) {
       return res.status(403).json({ message: "You are not a member of this channel" });
+    }
+
+    const canMutateAttach = await canUserMutateSharedChannel(user.id, payload.channelId);
+    if (!canMutateAttach) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; you cannot send messages in this channel.",
+      });
     }
 
     // Check if user can send attachments (enabled for workspace, or user is admin/moderator)
@@ -586,6 +604,15 @@ export const updateMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
+    if (message.channelId) {
+      const canMutate = await canUserMutateSharedChannel(user.id, message.channelId);
+      if (!canMutate) {
+        return res.status(403).json({
+          message: "Collaboration is no longer active; you cannot edit messages in this channel.",
+        });
+      }
+    }
+
     // [mentions] Process mentions in updated content
     const { sanitizedContent, mentionedUserIds } = await processMentions(
       payload.content,
@@ -710,6 +737,15 @@ export const deleteMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
+    if (message.channelId) {
+      const canMutate = await canUserMutateSharedChannel(user.id, message.channelId);
+      if (!canMutate) {
+        return res.status(403).json({
+          message: "Collaboration is no longer active; you cannot delete messages in this channel.",
+        });
+      }
+    }
+
     // Only message author or workspace admin can delete
     const workspaceMember = await prisma.member.findFirst({
       where: {
@@ -781,6 +817,15 @@ export const reactToMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
+    if (message.channelId) {
+      const canMutate = await canUserMutateSharedChannel(user.id, message.channelId);
+      if (!canMutate) {
+        return res.status(403).json({
+          message: "Collaboration is no longer active; you cannot react in this channel.",
+        });
+      }
+    }
+
     // Check if reaction already exists
     const existingReaction = await prisma.reaction.findUnique({
       where: {
@@ -835,6 +880,19 @@ export const removeReaction = async (req: Request, res: Response) => {
 
     const body = req.body;
     const payload = removeReactionSchema.parse(body);
+
+    const messageForReaction = await prisma.message.findUnique({
+      where: { id: payload.messageId },
+      select: { channelId: true },
+    });
+    if (messageForReaction?.channelId) {
+      const canMutate = await canUserMutateSharedChannel(user.id, messageForReaction.channelId);
+      if (!canMutate) {
+        return res.status(403).json({
+          message: "Collaboration is no longer active; you cannot modify reactions in this channel.",
+        });
+      }
+    }
 
     const reaction = await prisma.reaction.findUnique({
       where: {
@@ -926,14 +984,8 @@ export const forwardMessage = async (req: Request, res: Response) => {
 
     // Ensure user has access to the original message (channel member or conversation participant)
     if (originalMessage.channelId) {
-      const sourceChannelMember = await prisma.channelMember.findFirst({
-        where: {
-          channelId: originalMessage.channelId,
-          userId: user.id,
-          isActive: true,
-        },
-      });
-      if (!sourceChannelMember) {
+      const canReadSource = await canUserReadChannelHistory(originalMessage.channelId, user.id);
+      if (!canReadSource) {
         return res.status(403).json({ message: "You do not have access to the original message" });
       }
     } else if (originalMessage.conversationId) {
@@ -961,6 +1013,13 @@ export const forwardMessage = async (req: Request, res: Response) => {
     });
     if (!targetChannelMember) {
       return res.status(403).json({ message: "You are not a member of the target channel" });
+    }
+
+    const canMutateTarget = await canUserMutateSharedChannel(user.id, payload.channelId);
+    if (!canMutateTarget) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; you cannot forward into this channel.",
+      });
     }
 
     const targetChannel = await prisma.channel.findFirst({
