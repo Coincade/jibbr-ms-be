@@ -145,6 +145,47 @@ export async function publishUserStatusChangedEvent(
   }
 }
 
+export async function publishChannelMembershipUpdatedEvent(payload: {
+  userId: string;
+  channelId: string;
+  action: 'add' | 'remove';
+}) {
+  try {
+    const event: StreamEvent = {
+      eventId: randomUUID(),
+      type: 'membership.channel.updated',
+      data: payload,
+      timestamp: new Date().toISOString(),
+      source: 'messaging-service',
+    };
+    await publishEvent(STREAMS.USER_EVENTS, event);
+  } catch (error) {
+    console.error('[Streams] Failed to publish membership.channel.updated event:', error);
+  }
+}
+
+export async function publishConversationMembershipUpdatedEvent(payload: {
+  userId: string;
+  conversationId: string;
+  action: 'add' | 'remove';
+}) {
+  try {
+    const event: StreamEvent = {
+      eventId: randomUUID(),
+      type: 'membership.conversation.updated',
+      data: payload,
+      timestamp: new Date().toISOString(),
+      source: 'messaging-service',
+    };
+    await publishEvent(STREAMS.USER_EVENTS, event);
+  } catch (error) {
+    console.error('[Streams] Failed to publish membership.conversation.updated event:', error);
+  }
+}
+
+export const publishChannelMembershipUpdatedEventNow = publishChannelMembershipUpdatedEvent;
+export const publishConversationMembershipUpdatedEventNow = publishConversationMembershipUpdatedEvent;
+
 export async function publishWorkspaceEvent(
   type: 'workspace.created' | 'workspace.updated' | 'workspace.deleted',
   workspace: any

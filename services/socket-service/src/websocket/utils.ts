@@ -8,6 +8,11 @@ import {
 import prisma from '../config/database.js';
 import { ChannelClientsMap, ConversationClientsMap } from './types.js';
 import type { SocketLike } from './ws-compat.js';
+import {
+  validateChannelMembershipCached,
+  validateConversationParticipationCached,
+  validateWorkspaceMembershipCached,
+} from '../services/socket-membership-cache.service.js';
 
 // Socket-like client with user info
 export interface SocketWithUser extends SocketLike {
@@ -117,44 +122,14 @@ export const getWorkspaceRoomKey = (workspaceId: string): string => `workspace:$
  * Validate channel membership
  */
 export const validateChannelMembership = async (userId: string, channelId: string): Promise<boolean> => {
-  try {
-    const { default: prisma } = await import('../config/database.js');
-    
-    const channelMember = await prisma.channelMember.findFirst({
-      where: {
-        channelId,
-        userId,
-        isActive: true,
-      },
-    });
-    
-    return !!channelMember;
-  } catch (error) {
-    console.error('Error validating channel membership:', error);
-    return false;
-  }
+  return validateChannelMembershipCached(userId, channelId);
 };
 
 /**
  * Validate conversation participation
  */
 export const validateConversationParticipation = async (userId: string, conversationId: string): Promise<boolean> => {
-  try {
-    const { default: prisma } = await import('../config/database.js');
-    
-    const participant = await prisma.conversationParticipant.findFirst({
-      where: {
-        conversationId,
-        userId,
-        isActive: true,
-      },
-    });
-    
-    return !!participant;
-  } catch (error) {
-    console.error('Error validating conversation participation:', error);
-    return false;
-  }
+  return validateConversationParticipationCached(userId, conversationId);
 };
 
 /** Same rules as messaging-service (pairwise + group cross-workspace DMs). */
@@ -178,57 +153,7 @@ export const assertCanMutateSharedChannel = async (userId: string, channelId: st
 };
 
 export const validateWorkspaceMembership = async (userId: string, workspaceId: string): Promise<boolean> => {
-  try {
-    const { default: prisma } = await import('../config/database.js');
-
-    const member = await prisma.member.findFirst({
-      where: {
-        workspaceId,
-        userId,
-        isActive: true,
-      },
-    });
-
-    if (member) return true;
-
-    const userWorkspaceMemberships = await prisma.member.findMany({
-      where: {
-        userId,
-        isActive: true,
-      },
-      select: {
-        workspaceId: true,
-      },
-    });
-
-    const userWorkspaceIds = userWorkspaceMemberships.map((entry) => entry.workspaceId);
-    if (!userWorkspaceIds.length) return false;
-
-    const collaboration = await prisma.workspaceCollaboration.findFirst({
-      where: {
-        status: "ACTIVE",
-        OR: [
-          {
-            workspaceAId: { in: userWorkspaceIds },
-            workspaceBId: workspaceId,
-          },
-          {
-            workspaceAId: workspaceId,
-            workspaceBId: { in: userWorkspaceIds },
-          },
-        ],
-        policy: {
-          allowExternalDiscovery: true,
-        },
-      },
-      select: { id: true },
-    });
-
-    return !!collaboration;
-  } catch (error) {
-    console.error('Error validating workspace membership:', error);
-    return false;
-  }
+  return validateWorkspaceMembershipCached(userId, workspaceId);
 };
 
 /**

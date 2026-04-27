@@ -5,7 +5,10 @@ import { formatError, canUserSendAttachmentsToChannel } from "../helper.js";
 import { isWorkspaceAdmin } from "../helpers/collaborationAccess.js";
 import { ZodError } from "zod";
 import { z } from "zod";
-import { publishChannelEvent } from "../services/streams-publisher.service.js";
+import {
+  publishChannelEvent,
+} from "../services/streams-publisher.service.js";
+import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
 
 const createChannelSchema = z.object({
   name: z.string().min(1),
@@ -643,19 +646,34 @@ export const joinChannel = async (req: Request, res: Response) => {
 
     let channelMember;
     if (previouslyRemoved) {
-      channelMember = await prisma.channelMember.update({
-        where: { id: previouslyRemoved.id },
-        data: { isActive: true }
+      channelMember = await prisma.$transaction(async (tx) => {
+        const updated = await tx.channelMember.update({
+          where: { id: previouslyRemoved.id },
+          data: { isActive: true }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+          userId: user.id,
+          channelId: channel.id,
+          action: "add",
+        });
+        return updated;
       });
     } else {
-      channelMember = await prisma.channelMember.create({
-        data: {
+      channelMember = await prisma.$transaction(async (tx) => {
+        const created = await tx.channelMember.create({
+          data: {
+            userId: user.id,
+            channelId: channel.id
+          }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
           userId: user.id,
-          channelId: channel.id
-        }
+          channelId: channel.id,
+          action: "add",
+        });
+        return created;
       });
     }
-
     return res.status(200).json({
       message: "Joined channel successfully",
       data: channelMember
@@ -794,9 +812,16 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
         where: { userId: payload.userId, channelId: channel.id, isActive: false }
       });
       if (inactiveMembership) {
-        await prisma.channelMember.updateMany({
-          where: { userId: payload.userId, channelId: channel.id },
-          data: { isActive: true, isExternal }
+        await prisma.$transaction(async (tx) => {
+          await tx.channelMember.updateMany({
+            where: { userId: payload.userId, channelId: channel.id },
+            data: { isActive: true, isExternal }
+          });
+          await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+            userId: payload.userId,
+            channelId: channel.id,
+            action: "add",
+          });
         });
         const updated = await prisma.channelMember.findFirst({
           where: { userId: payload.userId, channelId: channel.id }
@@ -807,12 +832,20 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
         });
       }
 
-      const newChannelMember = await prisma.channelMember.create({
-        data: {
+      const newChannelMember = await prisma.$transaction(async (tx) => {
+        const created = await tx.channelMember.create({
+          data: {
+            userId: payload.userId,
+            channelId: channel.id,
+            isExternal
+          }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
           userId: payload.userId,
           channelId: channel.id,
-          isExternal
-        }
+          action: "add",
+        });
+        return created;
       });
       return res.status(200).json({
         message: "Member added to channel successfully",
@@ -887,9 +920,16 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
     });
 
     if (inactiveMembership) {
-      await prisma.channelMember.updateMany({
-        where: { userId: payload.userId, channelId: channel.id },
-        data: { isActive: true }
+      await prisma.$transaction(async (tx) => {
+        await tx.channelMember.updateMany({
+          where: { userId: payload.userId, channelId: channel.id },
+          data: { isActive: true }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+          userId: payload.userId,
+          channelId: channel.id,
+          action: "add",
+        });
       });
       return res.status(200).json({
         message: "Member added to channel successfully",
@@ -898,13 +938,20 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
     }
 
     // Add the user to the channel (new membership)
-    const newChannelMember = await prisma.channelMember.create({
-      data: {
+    const newChannelMember = await prisma.$transaction(async (tx) => {
+      const created = await tx.channelMember.create({
+        data: {
+          userId: payload.userId,
+          channelId: channel.id
+        }
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
         userId: payload.userId,
-        channelId: channel.id
-      }
+        channelId: channel.id,
+        action: "add",
+      });
+      return created;
     });
-
     return res.status(200).json({
       message: "Member added to channel successfully",
       data: newChannelMember
@@ -957,9 +1004,16 @@ export const removeMemberFromChannel = async (req: Request, res: Response) => {
           message: "You created this channel. Transfer ownership to another member or delete the channel before leaving."
         });
       }
-      await prisma.channelMember.updateMany({
-        where: { channelId, userId: targetUserId },
-        data: { isActive: false }
+      await prisma.$transaction(async (tx) => {
+        await tx.channelMember.updateMany({
+          where: { channelId, userId: targetUserId },
+          data: { isActive: false }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+          userId: targetUserId,
+          channelId,
+          action: "remove",
+        });
       });
       return res.status(200).json({ message: "You have left the channel" });
     }
@@ -990,9 +1044,16 @@ export const removeMemberFromChannel = async (req: Request, res: Response) => {
       }
     }
 
-    await prisma.channelMember.updateMany({
-      where: { channelId, userId: targetUserId },
-      data: { isActive: false }
+    await prisma.$transaction(async (tx) => {
+      await tx.channelMember.updateMany({
+        where: { channelId, userId: targetUserId },
+        data: { isActive: false }
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+        userId: targetUserId,
+        channelId,
+        action: "remove",
+      });
     });
 
     return res.status(200).json({ message: "Member removed from channel successfully" });
@@ -1509,17 +1570,24 @@ export const acceptBridgeInvite = async (req: Request, res: Response) => {
       });
     }
 
-    await prisma.channelMember.create({
-      data: {
-        channelId: invite.channelId,
-        userId: inviteeUser.id,
-        isExternal: true
-      }
-    });
+    await prisma.$transaction(async (tx) => {
+      await tx.channelMember.create({
+        data: {
+          channelId: invite.channelId,
+          userId: inviteeUser.id,
+          isExternal: true
+        }
+      });
 
-    await prisma.channelInvite.update({
-      where: { id: invite.id },
-      data: { status: "ACCEPTED", acceptedAt: new Date() }
+      await tx.channelInvite.update({
+        where: { id: invite.id },
+        data: { status: "ACCEPTED", acceptedAt: new Date() }
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+        userId: inviteeUser.id,
+        channelId: invite.channelId,
+        action: "add",
+      });
     });
 
     return res.status(200).json({

@@ -9,7 +9,11 @@ import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
 import { z, ZodError } from "zod";
-import { publishMessageCreatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
+import {
+  publishMessageCreatedEvent,
+  publishMessageDeletedEvent,
+} from "../services/streams-publisher.service.js";
+import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
 import { buildForwardedContent } from "./message.controller.js";
 import { htmlToCleanText } from "../libs/htmlToCleanText.js";
 import {
@@ -248,31 +252,44 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
     }
 
     // Create new conversation in this workspace
-    const conversation = await prisma.conversation.create({
-      data: {
-        workspaceId: workspaceId, // Associate with source workspace
-        collaborationId: collaborationId ?? undefined,
-        groupId: groupId ?? undefined,
-        participants: {
-          create: [
-            { userId: user.id, isActive: true },
-            { userId: targetUserId, isActive: true }
-          ]
-        }
-      },
-      include: {
-        participants: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true
+    const conversation = await prisma.$transaction(async (tx) => {
+      const created = await tx.conversation.create({
+        data: {
+          workspaceId: workspaceId, // Associate with source workspace
+          collaborationId: collaborationId ?? undefined,
+          groupId: groupId ?? undefined,
+          participants: {
+            create: [
+              { userId: user.id, isActive: true },
+              { userId: targetUserId, isActive: true }
+            ]
+          }
+        },
+        include: {
+          participants: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  image: true
+                }
               }
             }
           }
         }
-      }
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.conversation.updated", {
+        userId: user.id,
+        conversationId: created.id,
+        action: "add",
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.conversation.updated", {
+        userId: targetUserId,
+        conversationId: created.id,
+        action: "add",
+      });
+      return created;
     });
 
     // Check if file attachments are enabled for this conversation

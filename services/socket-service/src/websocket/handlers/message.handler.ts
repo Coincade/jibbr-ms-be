@@ -1,7 +1,6 @@
 import { Socket, ChannelClientsMap, SendMessageMessage, EditMessageMessage, DeleteMessageMessage, ForwardMessageMessage, MessageData } from '../types.js';
 import {
   assertCanMutateSharedChannel,
-  canUserReadChannelHistory,
   validateChannelMembership,
   validateConversationParticipation,
   getUserInfo,
@@ -155,7 +154,10 @@ export const handleSendMessage = async (
         throw new Error('Original message not found or has been deleted');
       }
       if (originalMessage.channelId) {
-        const canReadSource = await canUserReadChannelHistory(originalMessage.channelId, socket.data.user.id);
+        const canReadSource = await validateChannelMembership(
+          socket.data.user.id,
+          originalMessage.channelId
+        );
         if (!canReadSource) {
           throw new Error('You do not have access to the original message');
         }
@@ -662,7 +664,10 @@ export const handleForwardMessage = async (
 
     // Validate user has access to the original message (channel or DM)
     if (originalMessage.channelId) {
-      const canReadSource = await canUserReadChannelHistory(originalMessage.channelId, socket.data.user.id);
+      const canReadSource = await validateChannelMembership(
+        socket.data.user.id,
+        originalMessage.channelId
+      );
       if (!canReadSource) {
         throw new Error('You do not have access to the original message');
       }

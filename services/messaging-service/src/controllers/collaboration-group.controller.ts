@@ -10,6 +10,7 @@ import {
   publishCollaborationInvalidate,
 } from "../services/streams-publisher.service.js";
 import { NotificationService } from "../services/notification.service.js";
+import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -576,19 +577,27 @@ export const createGroupSharedChannel = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "Only group owner or workspace admins can create shared channels" });
     }
 
-    const channel = await prisma.channel.create({
-      data: {
-        name: payload.name,
-        type: payload.type ?? "PRIVATE",
-        description: payload.description?.trim() || null,
-        isBridgeChannel: false,
-        workspaceId: payload.ownerWorkspaceId,
-        groupId,
-        channelAdminId: user.id,
-        members: {
-          create: { userId: user.id, isExternal: false },
+    const channel = await prisma.$transaction(async (tx) => {
+      const created = await tx.channel.create({
+        data: {
+          name: payload.name,
+          type: payload.type ?? "PRIVATE",
+          description: payload.description?.trim() || null,
+          isBridgeChannel: false,
+          workspaceId: payload.ownerWorkspaceId,
+          groupId,
+          channelAdminId: user.id,
+          members: {
+            create: { userId: user.id, isExternal: false },
+          },
         },
-      },
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+        userId: user.id,
+        channelId: created.id,
+        action: "add",
+      });
+      return created;
     });
 
     await writeAudit(groupId, user.id, "GROUP_CHANNEL_CREATED", {

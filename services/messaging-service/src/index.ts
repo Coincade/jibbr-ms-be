@@ -16,6 +16,12 @@ import recentsRoutes from './routes/recents.route.js';
 import searchRoutes from './routes/search.route.js';
 import workspaceCollaborationRoutes from './routes/workspace-collaboration.route.js';
 import collaborationGroupRoutes from './routes/collaboration-group.route.js';
+import {
+  getMembershipOutboxStats,
+  initMembershipOutbox,
+  startMembershipOutboxCleanup,
+  startMembershipOutboxRelay,
+} from './services/membership-outbox.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -37,6 +43,19 @@ app.use('/api/recents', recentsRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/workspace-collaborations', workspaceCollaborationRoutes);
 app.use('/api/collaboration-groups', collaborationGroupRoutes);
+app.get('/health/outbox', async (_req, res) => {
+  try {
+    const stats = await getMembershipOutboxStats();
+    res.json({
+      status: 'healthy',
+      service: 'messaging-service',
+      outbox: stats,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to read outbox stats' });
+  }
+});
 const httpServer = createServer(app);
 const logger = new Logger('messaging-service');
 
@@ -63,6 +82,16 @@ void tryConnectDb();
 setInterval(() => {
   if (!dbConnected) void tryConnectDb();
 }, 10_000);
+
+void initMembershipOutbox()
+  .then(() => {
+    startMembershipOutboxRelay();
+    startMembershipOutboxCleanup();
+    logger.info('✅ Membership outbox relay started');
+  })
+  .catch((error) => {
+    logger.error('❌ Failed to initialize membership outbox', error as Error);
+  });
 
 const PORT = process.env.PORT || process.env.MESSAGING_PORT || 3003;
 

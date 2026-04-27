@@ -14,6 +14,7 @@ import {
   publishCollaborationInvalidate,
 } from "../services/streams-publisher.service.js";
 import { NotificationService } from "../services/notification.service.js";
+import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
 
 const requestSchema = z
   .object({
@@ -547,22 +548,30 @@ export const createSharedChannel = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "Only linked workspace admins can create shared channels" });
     }
 
-    const channel = await prisma.channel.create({
-      data: {
-        name: payload.name,
-        type: payload.type ?? "PRIVATE",
-        description: payload.description?.trim() || null,
-        isBridgeChannel: false,
-        workspaceId: payload.ownerWorkspaceId,
-        collaborationId: link.id,
-        channelAdminId: user.id,
-        members: {
-          create: {
-            userId: user.id,
-            isExternal: false,
+    const channel = await prisma.$transaction(async (tx) => {
+      const created = await tx.channel.create({
+        data: {
+          name: payload.name,
+          type: payload.type ?? "PRIVATE",
+          description: payload.description?.trim() || null,
+          isBridgeChannel: false,
+          workspaceId: payload.ownerWorkspaceId,
+          collaborationId: link.id,
+          channelAdminId: user.id,
+          members: {
+            create: {
+              userId: user.id,
+              isExternal: false,
+            },
           },
         },
-      },
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+        userId: user.id,
+        channelId: created.id,
+        action: "add",
+      });
+      return created;
     });
 
     await writeAudit(link.id, user.id, "SHARED_CHANNEL_CREATED", {
@@ -662,17 +671,30 @@ export const createExternalDirectMessage = async (req: Request, res: Response) =
       return res.status(200).json({ message: "Conversation found", data: existingConversation });
     }
 
-    const conversation = await prisma.conversation.create({
-      data: {
-        workspaceId: payload.sourceWorkspaceId,
-        collaborationId: link.id,
-        participants: {
-          create: [{ userId: user.id }, { userId: payload.targetUserId }],
+    const conversation = await prisma.$transaction(async (tx) => {
+      const created = await tx.conversation.create({
+        data: {
+          workspaceId: payload.sourceWorkspaceId,
+          collaborationId: link.id,
+          participants: {
+            create: [{ userId: user.id }, { userId: payload.targetUserId }],
+          },
         },
-      },
-      include: {
-        participants: true,
-      },
+        include: {
+          participants: true,
+        },
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.conversation.updated", {
+        userId: user.id,
+        conversationId: created.id,
+        action: "add",
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.conversation.updated", {
+        userId: payload.targetUserId,
+        conversationId: created.id,
+        action: "add",
+      });
+      return created;
     });
 
     await writeAudit(link.id, user.id, "EXTERNAL_DM_CREATED", {

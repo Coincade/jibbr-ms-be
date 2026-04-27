@@ -9,6 +9,11 @@ import {
   STREAMS_READ_COUNT,
   STREAMS_BLOCK_MS,
 } from '../config/streams.js';
+import {
+  applyChannelMembershipUpdate,
+  applyConversationMembershipUpdate,
+  invalidateMembershipCacheForWorkspaces,
+} from './socket-membership-cache.service.js';
 
 type StreamMessage = {
   id: string;
@@ -322,6 +327,22 @@ async function handleUserEvent(event: StreamEvent) {
   const { type, data } = event;
 
   switch (type) {
+    case 'membership.channel.updated': {
+      const action = data.action as 'add' | 'remove';
+      const userId = data.userId as string | undefined;
+      const channelId = data.channelId as string | undefined;
+      if (!action || !userId || !channelId) break;
+      await applyChannelMembershipUpdate(userId, channelId, action);
+      break;
+    }
+    case 'membership.conversation.updated': {
+      const action = data.action as 'add' | 'remove';
+      const userId = data.userId as string | undefined;
+      const conversationId = data.conversationId as string | undefined;
+      if (!action || !userId || !conversationId) break;
+      await applyConversationMembershipUpdate(userId, conversationId, action);
+      break;
+    }
     case 'user.created':
       ioInstance.emit('user_created', {
         user: data,
@@ -402,6 +423,7 @@ async function handleWorkspaceEvent(event: StreamEvent) {
     case 'collaboration.updated': {
       const ids = data.workspaceIds as string[] | undefined;
       if (!Array.isArray(ids) || ids.length === 0) break;
+      await invalidateMembershipCacheForWorkspaces(ids);
       const envelope = {
         workspaceIds: ids,
         reason: data.reason as string | undefined,

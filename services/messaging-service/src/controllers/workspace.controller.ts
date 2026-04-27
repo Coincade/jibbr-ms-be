@@ -8,6 +8,7 @@ import { createWorkspaceSchema, joinWorkspaceSchema, joinWorkspaceByCodeSchema }
 import { ZodError } from "zod";
 import { publishWorkspaceEvent } from "../services/streams-publisher.service.js";
 import { canAccessWorkspaceResource } from "../helpers/collaborationAccess.js";
+import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
 
 const toWorkspaceSlug = (name: string): string => {
   const normalized = name
@@ -118,18 +119,30 @@ export const createWorkspace = async (req: Request, res: Response) => {
       },
     });
 
-    // Add workspace creator to both channels
-    await prisma.channelMember.createMany({
-      data: [
-        {
-          userId: user.id,
-          channelId: generalChannel.id,
-        },
-        {
-          userId: user.id,
-          channelId: townHallChannel.id,
-        },
-      ],
+    // Add workspace creator to both channels + enqueue membership events atomically.
+    await prisma.$transaction(async (tx) => {
+      await tx.channelMember.createMany({
+        data: [
+          {
+            userId: user.id,
+            channelId: generalChannel.id,
+          },
+          {
+            userId: user.id,
+            channelId: townHallChannel.id,
+          },
+        ],
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+        userId: user.id,
+        channelId: generalChannel.id,
+        action: "add",
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+        userId: user.id,
+        channelId: townHallChannel.id,
+        action: "add",
+      });
     });
 
     return res.status(201).json({
@@ -401,34 +414,42 @@ export const joinWorkspace = async (req: Request, res: Response) => {
       return res.status(422).json({ message: "You are already a member of this workspace" });
     }
     
-    const member = await prisma.member.create({
-      data: {
-        userId: user.id,
-        workspaceId: workspace.id,
-        role: "MEMBER",
-      },
-    });
+    const { member } = await prisma.$transaction(async (tx) => {
+      const createdMember = await tx.member.create({
+        data: {
+          userId: user.id,
+          workspaceId: workspace.id,
+          role: "MEMBER",
+        },
+      });
 
-    // Get the default channels (General and TownHall)
-    const defaultChannels = await prisma.channel.findMany({
-      where: {
-        workspaceId: workspace.id,
-        name: {
-          in: ["General", "TownHall"]
+      const defaultChannels = await tx.channel.findMany({
+        where: {
+          workspaceId: workspace.id,
+          name: {
+            in: ["General", "TownHall"]
+          }
+        }
+      });
+
+      if (defaultChannels.length > 0) {
+        await tx.channelMember.createMany({
+          data: defaultChannels.map(channel => ({
+            userId: user.id,
+            channelId: channel.id,
+          })),
+          skipDuplicates: true,
+        });
+        for (const channel of defaultChannels) {
+          await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+            userId: user.id,
+            channelId: channel.id,
+            action: "add",
+          });
         }
       }
+      return { member: createdMember };
     });
-
-    // Add user to both default channels
-    if (defaultChannels.length > 0) {
-      await prisma.channelMember.createMany({
-        data: defaultChannels.map(channel => ({
-          userId: user.id,
-          channelId: channel.id,
-        })),
-        skipDuplicates: true, // Skip if user is already a member
-      });
-    }
 
     return res.status(200).json({ message: "Joined workspace successfully", data: member });
   } catch (error) {
@@ -486,30 +507,39 @@ export const joinWorkspaceByCode = async (req: Request, res: Response) => {
       return res.status(422).json({ message: "You are already a member of this workspace" });
     }
 
-    await prisma.member.create({
-      data: {
-        userId: user.id,
-        workspaceId: workspace.id,
-        role: "MEMBER",
-      },
-    });
-
-    const defaultChannels = await prisma.channel.findMany({
-      where: {
-        workspaceId: workspace.id,
-        name: { in: ["General", "TownHall"] },
-      },
-    });
-
-    if (defaultChannels.length > 0) {
-      await prisma.channelMember.createMany({
-        data: defaultChannels.map((channel) => ({
+    await prisma.$transaction(async (tx) => {
+      await tx.member.create({
+        data: {
           userId: user.id,
-          channelId: channel.id,
-        })),
-        skipDuplicates: true,
+          workspaceId: workspace.id,
+          role: "MEMBER",
+        },
       });
-    }
+
+      const defaultChannels = await tx.channel.findMany({
+        where: {
+          workspaceId: workspace.id,
+          name: { in: ["General", "TownHall"] },
+        },
+      });
+
+      if (defaultChannels.length > 0) {
+        await tx.channelMember.createMany({
+          data: defaultChannels.map((channel) => ({
+            userId: user.id,
+            channelId: channel.id,
+          })),
+          skipDuplicates: true,
+        });
+        for (const channel of defaultChannels) {
+          await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+            userId: user.id,
+            channelId: channel.id,
+            action: "add",
+          });
+        }
+      }
+    });
 
     return res.status(200).json({
       message: "Joined workspace successfully",
