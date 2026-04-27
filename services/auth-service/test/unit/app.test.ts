@@ -56,6 +56,17 @@ describe('Auth App (App.ts)', () => {
     });
   });
 
+  it('passes db middleware for non-health routes when db is available', async () => {
+    const app = createAuthApp({
+      isDbConnected: () => true,
+    });
+
+    const res = await request(app).get('/api/open');
+
+    // Route does not exist, but middleware should pass through (not 503).
+    expect(res.status).toBe(404);
+  });
+
   it('sets view engine and views when viewsPath is provided', () => {
     const app = createAuthApp({
       viewsPath: 'C:\\tmp\\views',

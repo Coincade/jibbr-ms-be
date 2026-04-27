@@ -108,6 +108,7 @@ function createRes() {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   process.env.CLIENT_APP_URL = 'https://client.example.com';
   process.env.JWT_SECRET = 'test-secret';
   process.env.DELETE_PASS = 'delete-pass';
@@ -172,6 +173,25 @@ describe('Auth Controller Testing', () => {
       expect(res.json).toHaveBeenCalledWith({
         message: 'Please check your email to verify your account',
       });
+    });
+
+    it('returns 422 for invalid payload', async () => {
+      const req = createReq({
+        body: {
+          name: '',
+          email: 'bad-email',
+          password: '1',
+          confirmPassword: '2',
+        },
+      });
+      const res = createRes();
+
+      await register(req as any, res as any);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Invalid data' })
+      );
     });
   });
 
@@ -259,6 +279,19 @@ describe('Auth Controller Testing', () => {
             emailVerifiedAt: verifiedAt,
           }),
         })
+      );
+    });
+
+    it('returns 500 on unexpected error', async () => {
+      (prisma as any).user.findUnique.mockRejectedValue(new Error('db fail'));
+      const req = createReq({ body: { email: 'a@b.com', password: 'Abcdefg1' } });
+      const res = createRes();
+
+      await login(req as any, res as any);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Internal server error' })
       );
     });
   });
@@ -395,6 +428,63 @@ describe('Auth Controller Testing', () => {
         expect.objectContaining({ message: 'Email verified successfully' })
       );
     });
+
+    it('redirects to already-verified route for non-api request', async () => {
+      (prisma as any).user.findUnique.mockResolvedValue({
+        email_verified_at: new Date().toISOString(),
+      });
+      const req = createReq({
+        query: { email: 'a@b.com', token: 't' },
+        headers: { accept: 'text/html' },
+      });
+      const res = createRes();
+
+      await verifyEmail(req as any, res as any);
+
+      expect(res.redirect).toHaveBeenCalledWith(
+        expect.stringContaining('/verify-email?already_verified=1')
+      );
+    });
+
+    it('redirects to success page for non-api success', async () => {
+      (helper.checkDateHourDiff as any).mockReturnValue(1);
+      (prisma as any).user.findUnique.mockResolvedValue({
+        email_verified_at: null,
+        email_verify_token: 't',
+        email_verify_token_sent_at: new Date(),
+      });
+      (prisma as any).user.update.mockResolvedValue({});
+      const req = createReq({
+        query: { email: 'a@b.com', token: 't' },
+        headers: { accept: 'text/html' },
+      });
+      const res = createRes();
+
+      await verifyEmail(req as any, res as any);
+
+      expect(res.redirect).toHaveBeenCalledWith(
+        expect.stringContaining('/verify-email?email=')
+      );
+      expect(res.redirect).toHaveBeenCalledWith(
+        expect.stringContaining('verified=1')
+      );
+    });
+
+    it('returns 500 json for api request on unexpected error', async () => {
+      (prisma as any).user.findUnique.mockRejectedValue(new Error('db fail'));
+      const req = createReq({
+        query: { email: 'a@b.com', token: 't', format: 'json' },
+        headers: { accept: 'application/json' },
+      });
+      const res = createRes();
+
+      await verifyEmail(req as any, res as any);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Internal server error' })
+      );
+    });
   });
 
   describe('resendVerificationEmail', () => {
@@ -513,6 +603,26 @@ describe('Auth Controller Testing', () => {
   });
 
   describe('forgetResetPassword', () => {
+    it('returns 422 when user not found', async () => {
+      (prisma as any).user.findUnique.mockResolvedValue(null);
+      const req = createReq({
+        body: {
+          email: 'a@b.com',
+          token: 't',
+          password: 'Abcdefg1',
+          confirmPassword: 'Abcdefg1',
+        },
+      });
+      const res = createRes();
+
+      await forgetResetPassword(req as any, res as any);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'User not found' })
+      );
+    });
+
     it('returns 422 when token is invalid', async () => {
       (prisma as any).user.findUnique.mockResolvedValue({
         password_reset_token: 'correct',
@@ -593,6 +703,26 @@ describe('Auth Controller Testing', () => {
   });
 
   describe('resetPassword', () => {
+    it('returns 422 when user not found', async () => {
+      (prisma as any).user.findUnique.mockResolvedValue(null);
+      const req = createReq({
+        body: {
+          email: 'a@b.com',
+          currentPassword: 'Abcdefg1',
+          password: 'Abcdefg2',
+          confirmPassword: 'Abcdefg2',
+        },
+      });
+      const res = createRes();
+
+      await resetPassword(req as any, res as any);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'User not found' })
+      );
+    });
+
     it('returns 422 when current password incorrect', async () => {
       (prisma as any).user.findUnique.mockResolvedValue({ password: 'hash' });
       (bcrypt as any).compare.mockResolvedValue(false);
@@ -669,6 +799,27 @@ describe('Auth Controller Testing', () => {
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({ message: 'Password changed successfully' });
     });
+
+    it('returns 422 when confirm password does not match', async () => {
+      (prisma as any).user.findUnique.mockResolvedValue({ password: 'hash' });
+      (bcrypt as any).compare.mockResolvedValue(true);
+      const req = createReq({
+        body: {
+          email: 'a@b.com',
+          currentPassword: 'Abcdefg1',
+          password: 'Abcdefg2',
+          confirmPassword: 'Abcdefg3',
+        },
+      });
+      const res = createRes();
+
+      await resetPassword(req as any, res as any);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Invalid data' })
+      );
+    });
   });
 
   describe('deleteUser', () => {
@@ -694,6 +845,21 @@ describe('Auth Controller Testing', () => {
       expect(res.status).toHaveBeenCalledWith(400);
     });
 
+    it('returns 404 when user to delete does not exist', async () => {
+      (prisma as any).user.findUnique.mockResolvedValue(null);
+      const req = createReq({
+        user: { id: 'u1' },
+        params: { id: 'u2' },
+        body: { DELETE_PASS: 'delete-pass' },
+      });
+      const res = createRes();
+
+      await deleteUser(req as any, res as any);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ message: 'User not found' });
+    });
+
     it('deletes user and returns 200 on happy path (no workspaces)', async () => {
       (prisma as any).user.findUnique.mockResolvedValueOnce({ id: 'u2' }); // userToDelete
       (prisma as any).channel.findMany.mockResolvedValue([]); // channelsWhereUserIsAdmin
@@ -716,6 +882,55 @@ describe('Auth Controller Testing', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ deletedUserId: 'u2' })
       );
+    });
+
+    it('handles admin transfer, channel delete, workspace cascade and returns 200', async () => {
+      (prisma as any).user.findUnique
+        .mockResolvedValueOnce({ id: 'u2' })
+        .mockResolvedValueOnce({ id: 'creator-1' })
+        .mockResolvedValueOnce(null);
+
+      (prisma as any).channel.findMany.mockResolvedValue([
+        { id: 'ch-1', workspace: { userId: 'creator-1' } },
+        { id: 'ch-2', workspace: { userId: 'creator-missing' } },
+      ]);
+      (prisma as any).workspace.findMany.mockResolvedValue([{ id: 'w1' }]);
+      (prisma as any).user.delete.mockResolvedValue({});
+
+      const req = createReq({
+        user: { id: 'u1' },
+        params: { id: 'u2' },
+        body: { DELETE_PASS: 'delete-pass' },
+      });
+      const res = createRes();
+
+      await deleteUser(req as any, res as any);
+
+      expect((prisma as any).channel.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'ch-1' } })
+      );
+      expect((prisma as any).channel.delete).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'ch-2' } })
+      );
+      expect((prisma as any).workspace.delete).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'w1' } })
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('returns 500 when delete operation throws', async () => {
+      (prisma as any).user.findUnique.mockRejectedValue(new Error('db fail'));
+      const req = createReq({
+        user: { id: 'u1' },
+        params: { id: 'u2' },
+        body: { DELETE_PASS: 'delete-pass' },
+      });
+      const res = createRes();
+
+      await deleteUser(req as any, res as any);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ message: 'Internal server error' });
     });
   });
 });
