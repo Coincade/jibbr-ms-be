@@ -44,13 +44,32 @@ export const isFileAttachmentsEnabledForChannel = async (
         deletedAt: null,
       },
       select: {
+        collaborationId: true,
         workspace: {
           select: {
             fileAttachmentsEnabled: true,
           },
         },
+        collaboration: {
+          select: {
+            status: true,
+            policy: {
+              select: {
+                allowFileSharing: true,
+              },
+            },
+          },
+        },
       },
     });
+
+    if (channel?.collaborationId) {
+      return (
+        channel.collaboration?.status === "ACTIVE" &&
+        !!channel.collaboration.policy?.allowFileSharing &&
+        !!channel.workspace?.fileAttachmentsEnabled
+      );
+    }
 
     return channel?.workspace?.fileAttachmentsEnabled ?? true;
   } catch (error) {
@@ -71,13 +90,39 @@ export const isFileAttachmentsEnabledForConversation = async (
         id: conversationId,
       },
       select: {
+        collaborationId: true,
         workspace: {
           select: {
             fileAttachmentsEnabled: true,
           },
         },
+        collaboration: {
+          select: {
+            status: true,
+            policy: {
+              select: {
+                allowFileSharing: true,
+              },
+            },
+            workspaceA: {
+              select: { fileAttachmentsEnabled: true },
+            },
+            workspaceB: {
+              select: { fileAttachmentsEnabled: true },
+            },
+          },
+        },
       },
     });
+
+    if (conversation?.collaborationId) {
+      return (
+        conversation.collaboration?.status === "ACTIVE" &&
+        conversation.collaboration.policy.allowFileSharing &&
+        conversation.collaboration.workspaceA.fileAttachmentsEnabled &&
+        conversation.collaboration.workspaceB.fileAttachmentsEnabled
+      ) ?? false;
+    }
 
     return conversation?.workspace?.fileAttachmentsEnabled ?? true;
   } catch (error) {
@@ -102,10 +147,29 @@ export const canUserSendAttachmentsToChannel = async (
       where: { id: channelId, deletedAt: null },
       select: {
         workspaceId: true,
+        collaborationId: true,
         workspace: { select: { fileAttachmentsEnabled: true } },
+        collaboration: {
+          select: {
+            status: true,
+            policy: { select: { allowFileSharing: true } },
+          },
+        },
       },
     });
     if (!channel) return true;
+    if (channel.collaborationId) {
+      const policyOk =
+        channel.collaboration?.status === "ACTIVE" &&
+        channel.collaboration.policy.allowFileSharing;
+      if (!policyOk) return false;
+      if (channel.workspace.fileAttachmentsEnabled) return true;
+      const member = await prisma.member.findFirst({
+        where: { workspaceId: channel.workspaceId, userId, isActive: true },
+        select: { role: true },
+      });
+      return member?.role === 'ADMIN' || member?.role === 'MODERATOR';
+    }
     if (channel.workspace.fileAttachmentsEnabled) return true;
 
     const member = await prisma.member.findFirst({
@@ -132,10 +196,27 @@ export const canUserSendAttachmentsToConversation = async (
       where: { id: conversationId },
       select: {
         workspaceId: true,
+        collaborationId: true,
         workspace: { select: { fileAttachmentsEnabled: true } },
+        collaboration: {
+          select: {
+            status: true,
+            policy: { select: { allowFileSharing: true } },
+            workspaceA: { select: { fileAttachmentsEnabled: true } },
+            workspaceB: { select: { fileAttachmentsEnabled: true } },
+          },
+        },
       },
     });
     if (!conversation) return true;
+    if (conversation.collaborationId) {
+      return (
+        conversation.collaboration?.status === "ACTIVE" &&
+        conversation.collaboration.policy.allowFileSharing &&
+        conversation.collaboration.workspaceA.fileAttachmentsEnabled &&
+        conversation.collaboration.workspaceB.fileAttachmentsEnabled
+      ) ?? false;
+    }
     if (conversation.workspace.fileAttachmentsEnabled) return true;
 
     const member = await prisma.member.findFirst({
@@ -146,6 +227,26 @@ export const canUserSendAttachmentsToConversation = async (
   } catch (error) {
     console.error('Error checking canUserSendAttachmentsToConversation:', error);
     return true;
+  }
+};
+
+export const isTownhallChannelName = (name?: string | null): boolean => {
+  return (name ?? '').trim().toLowerCase() === 'townhall';
+};
+
+export const canUserForwardInTownhall = async (
+  workspaceId: string,
+  userId: string
+): Promise<boolean> => {
+  try {
+    const member = await prisma.member.findFirst({
+      where: { workspaceId, userId, isActive: true },
+      select: { role: true },
+    });
+    return member?.role === 'ADMIN' || member?.role === 'MODERATOR';
+  } catch (error) {
+    console.error('Error checking canUserForwardInTownhall:', error);
+    return false;
   }
 };
 

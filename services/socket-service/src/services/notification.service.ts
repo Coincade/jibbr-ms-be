@@ -1,3 +1,4 @@
+import { filterUserIdsWhoCanReadChannel } from '@jibbr/database';
 import prisma from '../config/database.js';
 import PushService from './push.service.js';
 import { shouldNotify, type NotificationPrefsRaw } from '@jibbr/shared-utils';
@@ -10,6 +11,9 @@ export interface NotificationData {
     | 'REACTION'
     | 'CHANNEL_INVITE'
     | 'WORKSPACE_INVITE'
+    | 'COLLABORATION_REQUEST'
+    | 'COLLABORATION_APPROVED'
+    | 'COLLABORATION_REVOKED'
     | 'SYSTEM';
   title: string;
   message: string;
@@ -19,6 +23,14 @@ export interface NotificationData {
 }
 
 export class NotificationService {
+  private static async getMutedUserIdsForChannel(channelId: string): Promise<Set<string>> {
+    const rows = await prisma.userChannelMute.findMany({
+      where: { channelId },
+      select: { userId: true },
+    });
+    return new Set(rows.map((r) => r.userId));
+  }
+
   private static sanitizeMessagePreview(messageContent?: string | null) {
     if (!messageContent) {
       return 'Sent an attachment';
@@ -165,8 +177,22 @@ export class NotificationService {
       const preview =
         NotificationService.sanitizeMessagePreview(messageContent);
 
+      const mutedUserIds = await NotificationService.getMutedUserIdsForChannel(channelId);
+
+      const allowedRecipients = await filterUserIdsWhoCanReadChannel(
+        prisma,
+        channelId,
+        channelMembers.map((m) => m.userId)
+      );
+
       for (const member of channelMembers) {
+        if (!allowedRecipients.has(member.userId)) {
+          continue;
+        }
+
         await this.incrementChannelUnreadCount(channelId, member.userId);
+
+        if (mutedUserIds.has(member.userId)) continue;
 
         const prefs: NotificationPrefsRaw | null = member.user.notificationPreferences
           ? {

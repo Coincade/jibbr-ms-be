@@ -31,13 +31,18 @@ export interface SearchResults {
     member_count?: number;
     type?: 'public' | 'private';
     image?: string;
+    /** Home workspace of the channel (needed for collab / partner public channels). */
+    workspace_id?: string;
   }>;
   users: Array<{
     id: string;
     username: string;
     avatar: string;
     display_name?: string;
+    name?: string;
     status?: string;
+    /** Home workspace(s) when the person is from a linked collab / network workspace (not the viewer's org). */
+    workspace_name?: string;
   }>;
   files: Array<{
     id: string;
@@ -65,6 +70,66 @@ export interface SearchResults {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
+
+/** Counterpart workspaces for global search (people + public channels) when discovery is allowed. */
+async function getDiscoverySearchWorkspaceIds(
+  userMemberWorkspaceIds: string[]
+): Promise<string[]> {
+  if (userMemberWorkspaceIds.length === 0) return [];
+
+  const [links, groupMemberships] = await Promise.all([
+    prisma.workspaceCollaboration.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [
+          { workspaceAId: { in: userMemberWorkspaceIds } },
+          { workspaceBId: { in: userMemberWorkspaceIds } },
+        ],
+      },
+      include: {
+        policy: { select: { allowExternalDiscovery: true } },
+      },
+    }),
+    prisma.collaborationGroupMembership.findMany({
+      where: {
+        workspaceId: { in: userMemberWorkspaceIds },
+        status: 'ACTIVE',
+        group: { status: 'ACTIVE', policy: { allowExternalDiscovery: true } },
+      },
+      include: {
+        group: {
+          include: {
+            memberships: {
+              where: { status: 'ACTIVE' },
+              select: { workspaceId: true },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+
+  const extra = new Set<string>();
+  for (const link of links) {
+    if (!link.policy.allowExternalDiscovery) continue;
+    if (userMemberWorkspaceIds.includes(link.workspaceAId)) {
+      extra.add(link.workspaceBId);
+    }
+    if (userMemberWorkspaceIds.includes(link.workspaceBId)) {
+      extra.add(link.workspaceAId);
+    }
+  }
+
+  for (const gm of groupMemberships) {
+    for (const member of gm.group.memberships) {
+      if (!userMemberWorkspaceIds.includes(member.workspaceId)) {
+        extra.add(member.workspaceId);
+      }
+    }
+  }
+
+  return [...extra];
+}
 
 /** Display quotas: show top N per group for focused results */
 const CHANNELS_QUOTA = 3;
@@ -149,6 +214,9 @@ export async function performSearch(
     return emptyResults(q, Date.now() - start);
   }
 
+  const collaboratorWorkspaceIds = await getDiscoverySearchWorkspaceIds(workspaceIds);
+  const searchWorkspaceIds = [...new Set([...workspaceIds, ...collaboratorWorkspaceIds])];
+
   // Channels user is a member of
   const channelMemberships = await prisma.channelMember.findMany({
     where: { userId, isActive: true },
@@ -156,10 +224,10 @@ export async function performSearch(
   });
   const joinedChannelIds = new Set(channelMemberships.map((c) => c.channelId));
 
-  // All channels in user's workspaces (for search) - user can see public channels
+  // All channels in member workspaces + linked workspaces (public channel discovery in partner org)
   const allChannelsInWorkspaces = await prisma.channel.findMany({
     where: {
-      workspaceId: { in: workspaceIds },
+      workspaceId: { in: searchWorkspaceIds },
       deletedAt: null,
     },
     select: {
@@ -167,6 +235,7 @@ export async function performSearch(
       name: true,
       type: true,
       image: true,
+      workspaceId: true,
       _count: { select: { members: true } },
     },
   });
@@ -238,8 +307,8 @@ export async function performSearch(
 
   const [messagesRes, channelsRes, usersRes, filesRes] = await Promise.all([
     searchMessages(messageWhere, searchTerm, limit, offset),
-    searchChannels(workspaceIds, searchTerm, joinedChannelIds, allChannelsInWorkspaces),
-    searchUsers(workspaceIds, searchTerm, userId),
+    searchChannels(searchWorkspaceIds, searchTerm, joinedChannelIds, allChannelsInWorkspaces),
+    searchUsers(searchWorkspaceIds, searchTerm, userId, workspaceIds),
     searchFiles(messageWhere, searchTerm, limit),
   ]);
 
@@ -334,7 +403,7 @@ async function searchMessages(
 }
 
 async function searchChannels(
-  workspaceIds: string[],
+  _workspaceIds: string[],
   searchTerm: string | null,
   joinedChannelIds: Set<string>,
   allChannels: Array<{
@@ -342,6 +411,7 @@ async function searchChannels(
     name: string;
     type: string;
     image: string | null;
+    workspaceId: string;
     _count: { members: number };
   }>
 ): Promise<{ channels: SearchResults['channels']; total: number }> {
@@ -370,6 +440,7 @@ async function searchChannels(
     member_count: s.item._count.members,
     type: (s.item.type === 'PUBLIC' ? 'public' : 'private') as 'public' | 'private',
     image: s.item.image ?? undefined,
+    workspace_id: s.item.workspaceId,
   }));
 
   return { channels: top, total };
@@ -378,8 +449,11 @@ async function searchChannels(
 async function searchUsers(
   workspaceIds: string[],
   searchTerm: string | null,
-  excludeUserId: string
+  excludeUserId: string,
+  /** Workspaces the searching user belongs to — used to label people from partner orgs. */
+  viewerWorkspaceIds: string[]
 ): Promise<{ users: SearchResults['users']; total: number }> {
+  const viewerWorkspaceSet = new Set(viewerWorkspaceIds);
   const members = await prisma.member.findMany({
     where: {
       workspaceId: { in: workspaceIds },
@@ -396,11 +470,32 @@ async function searchUsers(
           presenceStatus: true,
         },
       },
+      workspace: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
     },
   });
 
   const term = searchTerm?.replace(/%/g, '') ?? '';
-  let users = members.map((m) => m.user).filter(Boolean);
+  const userById = new Map<string, NonNullable<(typeof members)[0]['user']>>();
+  const externalWorkspaceNamesByUserId = new Map<string, Set<string>>();
+  for (const m of members) {
+    const u = m.user;
+    if (!u) continue;
+    if (!userById.has(u.id)) userById.set(u.id, u);
+    if (!viewerWorkspaceSet.has(m.workspaceId) && m.workspace?.name?.trim()) {
+      let set = externalWorkspaceNamesByUserId.get(u.id);
+      if (!set) {
+        set = new Set();
+        externalWorkspaceNamesByUserId.set(u.id, set);
+      }
+      set.add(m.workspace.name.trim());
+    }
+  }
+  let users = Array.from(userById.values());
   if (term) {
     users = users.filter(
       (u) =>
@@ -418,14 +513,24 @@ async function searchUsers(
     .sort((a, b) => b.score - a.score);
 
   const total = scored.length;
-  const top = scored.slice(0, USERS_QUOTA).map((s) => ({
-    id: s.item.id,
-    username: s.item.email?.split('@')[0] ?? s.item.name ?? '',
-    avatar: s.item.image ?? '',
-    display_name: s.item.name ?? undefined,
-    name: s.item.name ?? undefined,
-    status: s.item.presenceStatus?.toLowerCase() ?? undefined,
-  }));
+  const top = scored.slice(0, USERS_QUOTA).map((s) => {
+    const extSet = externalWorkspaceNamesByUserId.get(s.item.id);
+    const workspaceLabels = extSet
+      ? Array.from(extSet)
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b))
+      : [];
+    const workspace_name = workspaceLabels.length > 0 ? workspaceLabels.join(' · ') : undefined;
+    return {
+      id: s.item.id,
+      username: s.item.email?.split('@')[0] ?? s.item.name ?? '',
+      avatar: s.item.image ?? '',
+      display_name: s.item.name ?? undefined,
+      name: s.item.name ?? undefined,
+      status: s.item.presenceStatus?.toLowerCase() ?? undefined,
+      workspace_name,
+    };
+  });
 
   return { users: top, total };
 }

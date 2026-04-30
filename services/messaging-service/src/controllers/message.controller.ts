@@ -1,4 +1,9 @@
-import { formatError, canUserSendAttachmentsToChannel } from "../helper.js";
+import {
+  formatError,
+  canUserSendAttachmentsToChannel,
+  canUserForwardInTownhall,
+  isTownhallChannelName,
+} from "../helper.js";
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
 import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
@@ -16,6 +21,11 @@ import {
   removeReactionSchema,
 } from "../validation/message.validations.js";
 import { ZodError } from "zod";
+import {
+  canUserMutateSharedChannel,
+  canUserReadChannelHistory,
+  canUserReadConversationHistory,
+} from "../helpers/collaborationAccess.js";
 
 // Send a message (with optional attachments and reply)
 export const sendMessage = async (req: Request, res: Response) => {
@@ -39,6 +49,13 @@ export const sendMessage = async (req: Request, res: Response) => {
 
     if (!channelMember) {
       return res.status(403).json({ message: "You are not a member of this channel" });
+    }
+
+    const canMutate = await canUserMutateSharedChannel(user.id, payload.channelId);
+    if (!canMutate) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; you cannot send messages in this channel.",
+      });
     }
 
     // If replying, check if the original message exists
@@ -166,11 +183,18 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
+    const canMutateAttach = await canUserMutateSharedChannel(user.id, payload.channelId);
+    if (!canMutateAttach) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; you cannot send messages in this channel.",
+      });
+    }
+
     // Check if user can send attachments (enabled for workspace, or user is admin/moderator)
     const canSendAttachments = await canUserSendAttachmentsToChannel(payload.channelId, user.id);
     if (!canSendAttachments) {
       return res.status(403).json({ 
-        message: "File attachments are disabled for this workspace" 
+        message: "File uploads are disabled for your workspace in this channel/network."
       });
     }
 
@@ -310,16 +334,8 @@ export const getMessages = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Invalid before cursor" });
     }
 
-    // Check if user is member of the channel
-    const channelMember = await prisma.channelMember.findFirst({
-      where: {
-        channelId: payload.channelId,
-        userId: user.id,
-        isActive: true,
-      },
-    });
-
-    if (!channelMember) {
+    const canReadHistory = await canUserReadChannelHistory(payload.channelId, user.id);
+    if (!canReadHistory) {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
@@ -522,25 +538,13 @@ export const getMessage = async (req: Request, res: Response) => {
 
     // Check access: channel message → channel membership; DM (conversation) message → conversation participation
     if (message.channelId) {
-      const channelMember = await prisma.channelMember.findFirst({
-        where: {
-          channelId: message.channelId,
-          userId: user.id,
-          isActive: true,
-        },
-      });
-      if (!channelMember) {
+      const canReadHistory = await canUserReadChannelHistory(message.channelId, user.id);
+      if (!canReadHistory) {
         return res.status(403).json({ message: "You are not a member of this channel" });
       }
     } else if (message.conversationId) {
-      const participant = await prisma.conversationParticipant.findFirst({
-        where: {
-          conversationId: message.conversationId,
-          userId: user.id,
-          isActive: true,
-        },
-      });
-      if (!participant) {
+      const canReadHistory = await canUserReadConversationHistory(message.conversationId, user.id);
+      if (!canReadHistory) {
         return res.status(403).json({ message: "You are not a participant in this conversation" });
       }
     } else {
@@ -598,6 +602,15 @@ export const updateMessage = async (req: Request, res: Response) => {
 
     if (!channelMember) {
       return res.status(403).json({ message: "You are not a member of this channel" });
+    }
+
+    if (message.channelId) {
+      const canMutate = await canUserMutateSharedChannel(user.id, message.channelId);
+      if (!canMutate) {
+        return res.status(403).json({
+          message: "Collaboration is no longer active; you cannot edit messages in this channel.",
+        });
+      }
     }
 
     // [mentions] Process mentions in updated content
@@ -724,6 +737,15 @@ export const deleteMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
+    if (message.channelId) {
+      const canMutate = await canUserMutateSharedChannel(user.id, message.channelId);
+      if (!canMutate) {
+        return res.status(403).json({
+          message: "Collaboration is no longer active; you cannot delete messages in this channel.",
+        });
+      }
+    }
+
     // Only message author or workspace admin can delete
     const workspaceMember = await prisma.member.findFirst({
       where: {
@@ -795,6 +817,15 @@ export const reactToMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
+    if (message.channelId) {
+      const canMutate = await canUserMutateSharedChannel(user.id, message.channelId);
+      if (!canMutate) {
+        return res.status(403).json({
+          message: "Collaboration is no longer active; you cannot react in this channel.",
+        });
+      }
+    }
+
     // Check if reaction already exists
     const existingReaction = await prisma.reaction.findUnique({
       where: {
@@ -849,6 +880,19 @@ export const removeReaction = async (req: Request, res: Response) => {
 
     const body = req.body;
     const payload = removeReactionSchema.parse(body);
+
+    const messageForReaction = await prisma.message.findUnique({
+      where: { id: payload.messageId },
+      select: { channelId: true },
+    });
+    if (messageForReaction?.channelId) {
+      const canMutate = await canUserMutateSharedChannel(user.id, messageForReaction.channelId);
+      if (!canMutate) {
+        return res.status(403).json({
+          message: "Collaboration is no longer active; you cannot modify reactions in this channel.",
+        });
+      }
+    }
 
     const reaction = await prisma.reaction.findUnique({
       where: {
@@ -918,7 +962,7 @@ export const forwardMessage = async (req: Request, res: Response) => {
     const originalMessage = await prisma.message.findUnique({
       where: { id: payload.messageId },
       include: {
-        channel: { select: { id: true, name: true } },
+        channel: { select: { id: true, name: true, workspaceId: true } },
         conversation: { select: { id: true } },
         user: {
           select: {
@@ -940,14 +984,8 @@ export const forwardMessage = async (req: Request, res: Response) => {
 
     // Ensure user has access to the original message (channel member or conversation participant)
     if (originalMessage.channelId) {
-      const sourceChannelMember = await prisma.channelMember.findFirst({
-        where: {
-          channelId: originalMessage.channelId,
-          userId: user.id,
-          isActive: true,
-        },
-      });
-      if (!sourceChannelMember) {
+      const canReadSource = await canUserReadChannelHistory(originalMessage.channelId, user.id);
+      if (!canReadSource) {
         return res.status(403).json({ message: "You do not have access to the original message" });
       }
     } else if (originalMessage.conversationId) {
@@ -975,6 +1013,45 @@ export const forwardMessage = async (req: Request, res: Response) => {
     });
     if (!targetChannelMember) {
       return res.status(403).json({ message: "You are not a member of the target channel" });
+    }
+
+    const canMutateTarget = await canUserMutateSharedChannel(user.id, payload.channelId);
+    if (!canMutateTarget) {
+      return res.status(403).json({
+        message: "Collaboration is no longer active; you cannot forward into this channel.",
+      });
+    }
+
+    const targetChannel = await prisma.channel.findFirst({
+      where: {
+        id: payload.channelId,
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        name: true,
+        workspaceId: true,
+      },
+    });
+    if (!targetChannel) {
+      return res.status(404).json({ message: "Target channel not found" });
+    }
+
+    const townhallWorkspaceIds = new Set<string>();
+    if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+      townhallWorkspaceIds.add(originalMessage.channel.workspaceId);
+    }
+    if (isTownhallChannelName(targetChannel.name)) {
+      townhallWorkspaceIds.add(targetChannel.workspaceId);
+    }
+
+    for (const workspaceId of townhallWorkspaceIds) {
+      const allowed = await canUserForwardInTownhall(workspaceId, user.id);
+      if (!allowed) {
+        return res.status(403).json({
+          message: "Only admins and moderators can forward messages in #Townhall",
+        });
+      }
     }
 
     const sourceName = originalMessage.channel?.name ?? "Direct Message";
@@ -1073,16 +1150,8 @@ export const getForwardedMessages = async (req: Request, res: Response) => {
     const { channelId } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
-    // Check if user is member of the channel
-    const channelMember = await prisma.channelMember.findFirst({
-      where: {
-        channelId,
-        userId: user.id,
-        isActive: true,
-      },
-    });
-
-    if (!channelMember) {
+    const canReadHistory = await canUserReadChannelHistory(channelId, user.id);
+    if (!canReadHistory) {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
@@ -1161,68 +1230,126 @@ export const getMentions = async (req: Request, res: Response) => {
     const take = Math.min(Number(limit) || 20, 100);
 
     // Cursor-based pagination
-    let cursorWhere: any = {};
+    const buildCursorWhere = (createdAt?: Date | null, mentionId?: string | null) => {
+      if (!createdAt || !mentionId) return {};
+      return {
+        OR: [
+          {
+            createdAt: { lt: createdAt },
+          },
+          {
+            createdAt,
+            id: { lt: mentionId },
+          },
+        ],
+      };
+    };
+
+    let boundaryCreatedAt: Date | null = null;
+    let boundaryMentionId: string | null = null;
     if (cursor) {
       // Parse cursor: format is "createdAt:messageMentionId"
       const [createdAtStr, mentionId] = (cursor as string).split(':');
-      cursorWhere = {
-        OR: [
-          {
-            createdAt: { lt: new Date(createdAtStr) }
-          },
-          {
-            createdAt: new Date(createdAtStr),
-            id: { lt: mentionId }
-          }
-        ]
-      };
+      const parsedDate = new Date(createdAtStr);
+      if (!mentionId || Number.isNaN(parsedDate.getTime())) {
+        return res.status(400).json({ message: "Invalid cursor" });
+      }
+      boundaryCreatedAt = parsedDate;
+      boundaryMentionId = mentionId;
     }
 
-    // Get mentions for this user
-    const mentions = await prisma.messageMention.findMany({
-      where: {
-        userId: user.id,
-        ...cursorWhere
-      },
-      include: {
-        message: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
+    // Fetch mentions in chunks and keep only those still readable under collaboration revoke semantics.
+    const readableMentions: any[] = [];
+    const channelReadCache = new Map<string, boolean>();
+    const conversationReadCache = new Map<string, boolean>();
+    const chunkSize = Math.min(Math.max(take * 2, take + 1), 100);
+    let exhausted = false;
+    let loops = 0;
+    const maxLoops = 10;
+
+    while (readableMentions.length <= take && !exhausted && loops < maxLoops) {
+      loops += 1;
+
+      const mentionsChunk = await prisma.messageMention.findMany({
+        where: {
+          userId: user.id,
+          ...buildCursorWhere(boundaryCreatedAt, boundaryMentionId),
+        },
+        include: {
+          message: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  image: true,
+                },
               },
-            },
-            channel: {
-              select: {
-                id: true,
-                name: true,
+              channel: {
+                select: {
+                  id: true,
+                  name: true,
+                },
               },
-            },
-            attachments: true,
-            reactions: {
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
+              attachments: true,
+              reactions: {
+                include: {
+                  user: {
+                    select: {
+                      id: true,
+                      name: true,
+                    },
                   },
                 },
               },
             },
           },
         },
-      },
-      orderBy: [
-        { createdAt: 'desc' },
-        { id: 'desc' }
-      ],
-      take: take + 1, // Fetch one extra to determine if there's a next page
-    });
+        orderBy: [
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
+        take: chunkSize,
+      });
 
-    const hasNextPage = mentions.length > take;
-    const messages = hasNextPage ? mentions.slice(0, take) : mentions;
+      if (mentionsChunk.length === 0) {
+        exhausted = true;
+        break;
+      }
+
+      for (const mention of mentionsChunk) {
+        const msg = mention.message;
+        let canRead = false;
+
+        if (msg.channelId) {
+          if (!channelReadCache.has(msg.channelId)) {
+            channelReadCache.set(msg.channelId, await canUserReadChannelHistory(msg.channelId, user.id));
+          }
+          canRead = channelReadCache.get(msg.channelId) === true;
+        } else if (msg.conversationId) {
+          if (!conversationReadCache.has(msg.conversationId)) {
+            conversationReadCache.set(
+              msg.conversationId,
+              await canUserReadConversationHistory(msg.conversationId, user.id)
+            );
+          }
+          canRead = conversationReadCache.get(msg.conversationId) === true;
+        }
+
+        if (canRead) {
+          readableMentions.push(mention);
+          if (readableMentions.length > take) break;
+        }
+      }
+
+      const last = mentionsChunk[mentionsChunk.length - 1];
+      boundaryCreatedAt = last.createdAt;
+      boundaryMentionId = last.id;
+      if (mentionsChunk.length < chunkSize) exhausted = true;
+    }
+
+    const hasNextPage = readableMentions.length > take;
+    const messages = hasNextPage ? readableMentions.slice(0, take) : readableMentions;
 
     // Generate next cursor
     let nextCursor: string | null = null;

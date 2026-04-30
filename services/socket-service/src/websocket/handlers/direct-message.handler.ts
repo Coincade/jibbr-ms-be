@@ -11,6 +11,7 @@ import {
   validateConversationParticipation,
   getUserInfo,
   validateChannelMembership,
+  isCollaborationDmMutationAllowed,
 } from '../utils.js';
 import {
   sendDirectMessageSchema,
@@ -18,7 +19,11 @@ import {
 } from '../../validation/message.validations.js';
 import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
-import { canUserSendAttachmentsToConversation } from '../../helper.js';
+import {
+  canUserSendAttachmentsToConversation,
+  canUserForwardInTownhall,
+  isTownhallChannelName,
+} from '../../helper.js';
 import { htmlToCleanText } from '../../libs/htmlToCleanText.js';
 
 /**
@@ -56,25 +61,6 @@ export const handleSendDirectMessage = async (
       throw new Error('You are not a participant of this conversation');
     }
 
-    // Check if user can send attachments (if attachments are provided)
-    if (data.attachments && data.attachments.length > 0) {
-      const canSendAttachments =
-        await canUserSendAttachmentsToConversation(
-          data.conversationId,
-          socket.data.user.id
-        );
-      if (!canSendAttachments) {
-        throw new Error('File attachments are disabled for this conversation');
-      }
-    }
-
-    // Get user info
-    const userInfo = await getUserInfo(socket.data.user.id);
-    if (!userInfo) {
-      throw new Error('User not found');
-    }
-
-    // Save message to database
     const { default: prisma } = await import('../../config/database.js');
 
     // Idempotency: if the client retries the same message, return the previously created message.
@@ -133,6 +119,28 @@ export const handleSendDirectMessage = async (
       }
     }
 
+    const dmMutationOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmMutationOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
+    }
+
+    if (data.attachments && data.attachments.length > 0) {
+      const canSendAttachments = await canUserSendAttachmentsToConversation(
+        data.conversationId,
+        socket.data.user.id
+      );
+      if (!canSendAttachments) {
+        throw new Error('File attachments are disabled for this conversation');
+      }
+    }
+
+    const userInfo = await getUserInfo(socket.data.user.id);
+    if (!userInfo) {
+      throw new Error('User not found');
+    }
+
     // If replying, check if the original message exists and is not deleted
     if (payload.replyToId) {
       const originalMessage = await prisma.message.findUnique({
@@ -147,16 +155,25 @@ export const handleSendDirectMessage = async (
     if (payload.forwardedFromMessageId) {
       const originalMessage = await prisma.message.findUnique({
         where: { id: payload.forwardedFromMessageId },
+        include: {
+          channel: {
+            select: {
+              id: true,
+              name: true,
+              workspaceId: true,
+            },
+          },
+        },
       });
       if (!originalMessage || originalMessage.deletedAt) {
         throw new Error('Original message not found or has been deleted');
       }
       if (originalMessage.channelId) {
-        const isSourceMember = await validateChannelMembership(
+        const canReadSource = await validateChannelMembership(
           socket.data.user.id,
           originalMessage.channelId
         );
-        if (!isSourceMember) {
+        if (!canReadSource) {
           throw new Error('You do not have access to the original message');
         }
       } else if (originalMessage.conversationId) {
@@ -166,6 +183,16 @@ export const handleSendDirectMessage = async (
         );
         if (!isSourceParticipant) {
           throw new Error('You do not have access to the original message');
+        }
+      }
+
+      if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+        const allowed = await canUserForwardInTownhall(
+          originalMessage.channel.workspaceId,
+          socket.data.user.id
+        );
+        if (!allowed) {
+          throw new Error('Only admins and moderators can forward messages in #Townhall');
         }
       }
     }
@@ -322,16 +349,18 @@ export const handleSendDirectMessage = async (
       }
     })();
   } catch (error) {
+    const rawClientMessageId = (data as { clientMessageId?: string })?.clientMessageId;
+    const rawConversationId = data.conversationId ?? undefined;
+    const errorPayload = {
+      message: error instanceof ZodError ? 'Invalid message data' : error instanceof Error ? error.message : 'Failed to send direct message',
+      ...(rawClientMessageId ? { clientMessageId: rawClientMessageId } : {}),
+      ...(rawConversationId ? { conversationId: rawConversationId } : {}),
+    };
     if (error instanceof ZodError) {
-      socket.emit('error', { message: 'Invalid message data' });
+      socket.emit('error', errorPayload);
     } else {
       console.error('Error handling send direct message:', error);
-      socket.emit('error', {
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to send direct message',
-      });
+      socket.emit('error', errorPayload);
     }
   }
 };
@@ -363,6 +392,13 @@ export const handleEditDirectMessage = async (
     );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
+    }
+
+    const dmEditOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmEditOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
     }
 
     // Update message in database
@@ -458,6 +494,13 @@ export const handleDeleteDirectMessage = async (
     );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
+    }
+
+    const dmDeleteOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmDeleteOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
     }
 
     // Soft delete message from database
@@ -563,6 +606,13 @@ export const handleAddDirectReaction = async (
     );
     if (!isParticipant) {
       throw new Error('You are not a participant of this conversation');
+    }
+
+    const dmReactOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmReactOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
     }
 
     // Add reaction to database
@@ -677,6 +727,13 @@ export const handleRemoveDirectReaction = async (
       throw new Error('You are not a participant of this conversation');
     }
 
+    const dmRemoveReactOk = await isCollaborationDmMutationAllowed(data.conversationId);
+    if (!dmRemoveReactOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
+    }
+
     // Remove reaction from database
     const { default: prisma } = await import('../../config/database.js');
     const message = await prisma.message.findUnique({
@@ -771,11 +828,18 @@ export const handleForwardDirectMessage = async (
       throw new Error('You are not a participant of the target conversation');
     }
 
+    const forwardTargetOk = await isCollaborationDmMutationAllowed(data.targetConversationId);
+    if (!forwardTargetOk) {
+      throw new Error(
+        'Collaboration is no longer active; messaging is disabled for this conversation.'
+      );
+    }
+
     const { default: prisma } = await import('../../config/database.js');
     const originalMessage = await prisma.message.findUnique({
       where: { id: data.messageId },
       include: {
-        channel: { select: { id: true, name: true } },
+        channel: { select: { id: true, name: true, workspaceId: true } },
         user: { select: { id: true, name: true, image: true } },
         attachments: true,
       },
@@ -789,11 +853,11 @@ export const handleForwardDirectMessage = async (
     }
 
     if (originalMessage.channelId) {
-      const isSourceMember = await validateChannelMembership(
+      const canReadSource = await validateChannelMembership(
         socket.data.user.id,
         originalMessage.channelId
       );
-      if (!isSourceMember) {
+      if (!canReadSource) {
         throw new Error('You are not a member of the source channel');
       }
     } else if (originalMessage.conversationId) {
@@ -803,6 +867,16 @@ export const handleForwardDirectMessage = async (
       );
       if (!isSourceParticipant) {
         throw new Error('You are not a participant of the source conversation');
+      }
+    }
+
+    if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+      const allowed = await canUserForwardInTownhall(
+        originalMessage.channel.workspaceId,
+        socket.data.user.id
+      );
+      if (!allowed) {
+        throw new Error('Only admins and moderators can forward messages in #Townhall');
       }
     }
 

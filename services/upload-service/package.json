@@ -45,6 +45,7 @@
   "dependencies": {
     "@jibbr/auth-middleware": "*",
     "@jibbr/logger": "*",
+    "@jibbr/rate-limit": "*",
     "@jibbr/shared-types": "*",
     "@jibbr/shared-utils": "*",
     "@types/multer": "^2.0.0",

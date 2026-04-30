@@ -1,9 +1,18 @@
 import { Socket, ChannelClientsMap, SendMessageMessage, EditMessageMessage, DeleteMessageMessage, ForwardMessageMessage, MessageData } from '../types.js';
-import { validateChannelMembership, validateConversationParticipation, getUserInfo } from '../utils.js';
+import {
+  assertCanMutateSharedChannel,
+  validateChannelMembership,
+  validateConversationParticipation,
+  getUserInfo,
+} from '../utils.js';
 import { sendMessageSchema, updateMessageSchema } from '../../validation/message.validations.js';
 import { ZodError } from 'zod';
 import { NotificationService } from '../../services/notification.service.js';
-import { canUserSendAttachmentsToChannel } from '../../helper.js';
+import {
+  canUserSendAttachmentsToChannel,
+  canUserForwardInTownhall,
+  isTownhallChannelName,
+} from '../../helper.js';
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from '../../services/mention.service.js'; // [mentions]
 import { htmlToCleanText } from '../../libs/htmlToCleanText.js';
 
@@ -38,6 +47,8 @@ export const handleSendMessage = async (
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
+
+    await assertCanMutateSharedChannel(socket.data.user.id, data.channelId!);
 
     // Check if user can send attachments (if attachments are provided)
     if (data.attachments && data.attachments.length > 0) {
@@ -129,19 +140,54 @@ export const handleSendMessage = async (
     if (payload.forwardedFromMessageId) {
       const originalMessage = await prisma.message.findUnique({
         where: { id: payload.forwardedFromMessageId },
+        include: {
+          channel: {
+            select: {
+              id: true,
+              name: true,
+              workspaceId: true,
+            },
+          },
+        },
       });
       if (!originalMessage || originalMessage.deletedAt) {
         throw new Error('Original message not found or has been deleted');
       }
       if (originalMessage.channelId) {
-        const isSourceMember = await validateChannelMembership(socket.data.user.id, originalMessage.channelId);
-        if (!isSourceMember) {
+        const canReadSource = await validateChannelMembership(
+          socket.data.user.id,
+          originalMessage.channelId
+        );
+        if (!canReadSource) {
           throw new Error('You do not have access to the original message');
         }
       } else if (originalMessage.conversationId) {
         const isSourceParticipant = await validateConversationParticipation(socket.data.user.id, originalMessage.conversationId);
         if (!isSourceParticipant) {
           throw new Error('You do not have access to the original message');
+        }
+      }
+
+      const targetChannel = await prisma.channel.findFirst({
+        where: { id: payload.channelId, deletedAt: null },
+        select: { id: true, name: true, workspaceId: true },
+      });
+      if (!targetChannel) {
+        throw new Error('Target channel not found');
+      }
+
+      const townhallWorkspaceIds = new Set<string>();
+      if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+        townhallWorkspaceIds.add(originalMessage.channel.workspaceId);
+      }
+      if (isTownhallChannelName(targetChannel.name)) {
+        townhallWorkspaceIds.add(targetChannel.workspaceId);
+      }
+
+      for (const workspaceId of townhallWorkspaceIds) {
+        const allowed = await canUserForwardInTownhall(workspaceId, socket.data.user.id);
+        if (!allowed) {
+          throw new Error('Only admins and moderators can forward messages in #Townhall');
         }
       }
     }
@@ -353,11 +399,18 @@ export const handleSendMessage = async (
     })();
 
   } catch (error) {
+    const rawClientMessageId = (data as { clientMessageId?: string })?.clientMessageId;
+    const rawChannelId = data.channelId ?? undefined;
+    const errorPayload = {
+      message: error instanceof ZodError ? 'Invalid message data' : error instanceof Error ? error.message : 'Failed to send message',
+      ...(rawClientMessageId ? { clientMessageId: rawClientMessageId } : {}),
+      ...(rawChannelId ? { channelId: rawChannelId } : {}),
+    };
     if (error instanceof ZodError) {
-      socket.emit('error', { message: 'Invalid message data' });
+      socket.emit('error', errorPayload);
     } else {
       console.error('Error handling send message:', error);
-      socket.emit('error', { message: error instanceof Error ? error.message : 'Failed to send message' });
+      socket.emit('error', errorPayload);
     }
   }
 };
@@ -388,6 +441,8 @@ export const handleEditMessage = async (
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
+
+    await assertCanMutateSharedChannel(socket.data.user.id, data.channelId!);
 
     // Update message in database
     const { default: prisma } = await import('../../config/database.js');
@@ -487,6 +542,8 @@ export const handleDeleteMessage = async (
     if (!isMember) {
       throw new Error('You are not a member of this channel');
     }
+
+    await assertCanMutateSharedChannel(socket.data.user.id, data.channelId!);
 
     // Soft delete message from database
     const { default: prisma } = await import('../../config/database.js');
@@ -591,7 +648,7 @@ export const handleForwardMessage = async (
     const originalMessage = await prisma.message.findUnique({
       where: { id: data.messageId },
       include: {
-        channel: { select: { id: true, name: true } },
+        channel: { select: { id: true, name: true, workspaceId: true } },
         conversation: { select: { id: true } },
         user: { select: { id: true, name: true, image: true } },
         attachments: true,
@@ -607,8 +664,11 @@ export const handleForwardMessage = async (
 
     // Validate user has access to the original message (channel or DM)
     if (originalMessage.channelId) {
-      const isSourceMember = await validateChannelMembership(socket.data.user.id, originalMessage.channelId);
-      if (!isSourceMember) {
+      const canReadSource = await validateChannelMembership(
+        socket.data.user.id,
+        originalMessage.channelId
+      );
+      if (!canReadSource) {
         throw new Error('You do not have access to the original message');
       }
     } else if (originalMessage.conversationId) {
@@ -626,6 +686,31 @@ export const handleForwardMessage = async (
     const isTargetMember = await validateChannelMembership(socket.data.user.id, data.targetChannelId);
     if (!isTargetMember) {
       throw new Error('You are not a member of the target channel');
+    }
+
+    await assertCanMutateSharedChannel(socket.data.user.id, data.targetChannelId);
+
+    const targetChannel = await prisma.channel.findFirst({
+      where: { id: data.targetChannelId, deletedAt: null },
+      select: { id: true, name: true, workspaceId: true },
+    });
+    if (!targetChannel) {
+      throw new Error('Target channel not found');
+    }
+
+    const townhallWorkspaceIds = new Set<string>();
+    if (isTownhallChannelName(originalMessage.channel?.name) && originalMessage.channel?.workspaceId) {
+      townhallWorkspaceIds.add(originalMessage.channel.workspaceId);
+    }
+    if (isTownhallChannelName(targetChannel.name)) {
+      townhallWorkspaceIds.add(targetChannel.workspaceId);
+    }
+
+    for (const workspaceId of townhallWorkspaceIds) {
+      const allowed = await canUserForwardInTownhall(workspaceId, socket.data.user.id);
+      if (!allowed) {
+        throw new Error('Only admins and moderators can forward messages in #Townhall');
+      }
     }
 
     const sourceName = originalMessage.channel?.name ?? 'Direct Message';

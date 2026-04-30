@@ -81,11 +81,31 @@ export const createRedisClients = async () => {
 // State client for online users, caching, etc.
 export const createStateRedisClient = async () => {
   const url = getRedisUrl();
-  const client = createClient({ url: url });
+  const client = createClient({
+    url,
+    socket: {
+      reconnectStrategy: (retries: number) => {
+        if (retries > 10) return new Error('Max retries reached');
+        const delays = [100, 300, 1000, 3000];
+        return delays[Math.min(retries, delays.length - 1)];
+      },
+    },
+  });
   client.on('error', (err: Error) => console.error('❌ Redis State Error:', err));
   await client.connect();
   console.log('✅ Redis State client connected');
   return client;
+};
+
+let stateClientPromise: Promise<any> | null = null;
+export const getStateRedisClient = async () => {
+  if (!stateClientPromise) {
+    stateClientPromise = createStateRedisClient().catch((error) => {
+      stateClientPromise = null;
+      throw error;
+    });
+  }
+  return stateClientPromise;
 };
 
 // Stream client for Valkey Streams (socket-service consumers)

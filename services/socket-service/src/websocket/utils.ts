@@ -1,7 +1,18 @@
 import { JwtPayload } from 'jsonwebtoken';
 import jwt from 'jsonwebtoken';
+import {
+  canUserMutateSharedChannel as canUserMutateSharedChannelDb,
+  canUserReadChannelHistory as canUserReadChannelHistoryDb,
+  isCollaborationDmMutationAllowedForConversation,
+} from '@jibbr/database';
+import prisma from '../config/database.js';
 import { ChannelClientsMap, ConversationClientsMap } from './types.js';
 import type { SocketLike } from './ws-compat.js';
+import {
+  validateChannelMembershipCached,
+  validateConversationParticipationCached,
+  validateWorkspaceMembershipCached,
+} from '../services/socket-membership-cache.service.js';
 
 // Socket-like client with user info
 export interface SocketWithUser extends SocketLike {
@@ -105,48 +116,44 @@ export const sendToUser = (io: any, userId: string, event: string, data: any): v
   io.to(`user_${userId}`).emit(event, data);
 };
 
+export const getWorkspaceRoomKey = (workspaceId: string): string => `workspace:${workspaceId}`;
+
 /**
  * Validate channel membership
  */
 export const validateChannelMembership = async (userId: string, channelId: string): Promise<boolean> => {
-  try {
-    const { default: prisma } = await import('../config/database.js');
-    
-    const channelMember = await prisma.channelMember.findFirst({
-      where: {
-        channelId,
-        userId,
-        isActive: true,
-      },
-    });
-    
-    return !!channelMember;
-  } catch (error) {
-    console.error('Error validating channel membership:', error);
-    return false;
-  }
+  return validateChannelMembershipCached(userId, channelId);
 };
 
 /**
  * Validate conversation participation
  */
 export const validateConversationParticipation = async (userId: string, conversationId: string): Promise<boolean> => {
+  return validateConversationParticipationCached(userId, conversationId);
+};
+
+/** Same rules as messaging-service (pairwise + group cross-workspace DMs). */
+export const isCollaborationDmMutationAllowed = async (conversationId: string): Promise<boolean> => {
   try {
-    const { default: prisma } = await import('../config/database.js');
-    
-    const participant = await prisma.conversationParticipant.findFirst({
-      where: {
-        conversationId,
-        userId,
-        isActive: true,
-      },
-    });
-    
-    return !!participant;
+    return isCollaborationDmMutationAllowedForConversation(prisma, conversationId);
   } catch (error) {
-    console.error('Error validating conversation participation:', error);
+    console.error('Error checking collaboration DM mutation:', error);
     return false;
   }
+};
+
+export const canUserReadChannelHistory = (channelId: string, userId: string) =>
+  canUserReadChannelHistoryDb(prisma, channelId, userId);
+
+export const assertCanMutateSharedChannel = async (userId: string, channelId: string): Promise<void> => {
+  const ok = await canUserMutateSharedChannelDb(prisma, userId, channelId);
+  if (!ok) {
+    throw new Error('Collaboration is no longer active; messaging is disabled for this channel.');
+  }
+};
+
+export const validateWorkspaceMembership = async (userId: string, workspaceId: string): Promise<boolean> => {
+  return validateWorkspaceMembershipCached(userId, workspaceId);
 };
 
 /**

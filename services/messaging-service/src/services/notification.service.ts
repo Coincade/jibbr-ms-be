@@ -1,10 +1,20 @@
+import { filterUserIdsWhoCanReadChannel } from "@jibbr/database";
 import prisma from "../config/database.js";
 import PushService from "./push.service.js";
 import { shouldNotify, type NotificationPrefsRaw } from "@jibbr/shared-utils";
 
 export interface NotificationData {
   id: string;
-  type: 'NEW_MESSAGE' | 'MENTION' | 'REACTION' | 'CHANNEL_INVITE' | 'WORKSPACE_INVITE' | 'SYSTEM';
+  type:
+    | 'NEW_MESSAGE'
+    | 'MENTION'
+    | 'REACTION'
+    | 'CHANNEL_INVITE'
+    | 'WORKSPACE_INVITE'
+    | 'COLLABORATION_REQUEST'
+    | 'COLLABORATION_APPROVED'
+    | 'COLLABORATION_REVOKED'
+    | 'SYSTEM';
   title: string;
   message: string;
   data?: any;
@@ -13,6 +23,14 @@ export interface NotificationData {
 }
 
 export class NotificationService {
+  private static async getMutedUserIdsForChannel(channelId: string): Promise<Set<string>> {
+    const rows = await prisma.userChannelMute.findMany({
+      where: { channelId },
+      select: { userId: true },
+    });
+    return new Set(rows.map((r) => r.userId));
+  }
+
   private static sanitizeMessagePreview(messageContent?: string | null) {
     if (!messageContent) {
       return "Sent an attachment";
@@ -162,8 +180,22 @@ export class NotificationService {
 
       const preview = NotificationService.sanitizeMessagePreview(messageContent);
 
+      const mutedUserIds = await NotificationService.getMutedUserIdsForChannel(channelId);
+
+      const allowedRecipients = await filterUserIdsWhoCanReadChannel(
+        prisma,
+        channelId,
+        channelMembers.map((m) => m.userId)
+      );
+
       for (const member of channelMembers) {
+        if (!allowedRecipients.has(member.userId)) {
+          continue;
+        }
+
         await this.incrementChannelUnreadCount(channelId, member.userId);
+
+        if (mutedUserIds.has(member.userId)) continue;
 
         const prefs: NotificationPrefsRaw | null = member.user.notificationPreferences
           ? {
@@ -603,6 +635,45 @@ export class NotificationService {
     } catch (error) {
       console.error('Error marking channel as read:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Notify all admins of a workspace about a collaboration lifecycle event.
+   * The actor who triggered the event is excluded from the recipient list.
+   * Workspace owner (Workspace.userId) is included in addition to ADMIN members.
+   */
+  static async notifyCollaborationAdmins(
+    workspaceId: string,
+    actorUserId: string,
+    type: 'COLLABORATION_REQUEST' | 'COLLABORATION_APPROVED' | 'COLLABORATION_REVOKED',
+    title: string,
+    message: string,
+    data: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      const [adminMembers, workspace] = await Promise.all([
+        prisma.member.findMany({
+          where: { workspaceId, role: 'ADMIN', isActive: true },
+          select: { userId: true },
+        }),
+        prisma.workspace.findUnique({
+          where: { id: workspaceId },
+          select: { userId: true },
+        }),
+      ]);
+
+      const recipientIds = new Set(adminMembers.map((m) => m.userId));
+      if (workspace?.userId) recipientIds.add(workspace.userId);
+      recipientIds.delete(actorUserId);
+
+      await Promise.all(
+        [...recipientIds].map((userId) =>
+          this.createNotification({ userId, type, title, message, data })
+        )
+      );
+    } catch (error) {
+      console.error(`[NotificationService] notifyCollaborationAdmins (${type}):`, error);
     }
   }
 

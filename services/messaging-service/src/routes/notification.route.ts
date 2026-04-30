@@ -10,6 +10,8 @@ import {
   updateNotificationPreferences,
   registerPushToken,
   unregisterPushToken,
+  getChannelMutes,
+  setChannelMute,
 } from "../controllers/notification.controller.js";
 
 const router = express.Router();
@@ -34,6 +36,10 @@ router.get("/preferences", authMiddleware(process.env.JWT_SECRET!) as unknown as
 
 // Update user notification preferences
 router.put("/preferences", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, updateNotificationPreferences as unknown as RequestHandler);
+
+// Synced per-channel mute (desktop + mobile)
+router.get("/channel-mutes", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, getChannelMutes as unknown as RequestHandler);
+router.put("/channel-mutes", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, setChannelMute as unknown as RequestHandler);
 
 // Register push tokens for mobile devices
 router.post("/register-push-token", authMiddleware(process.env.JWT_SECRET!) as unknown as RequestHandler, registerPushToken as unknown as RequestHandler);

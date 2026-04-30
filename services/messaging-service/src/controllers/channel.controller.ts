@@ -1,15 +1,22 @@
 import { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import prisma from "../config/database.js";
-import { formatError } from "../helper.js";
+import { formatError, canUserSendAttachmentsToChannel } from "../helper.js";
+import { isWorkspaceAdmin } from "../helpers/collaborationAccess.js";
 import { ZodError } from "zod";
 import { z } from "zod";
+import {
+  publishChannelEvent,
+} from "../services/streams-publisher.service.js";
+import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
 
 const createChannelSchema = z.object({
   name: z.string().min(1),
   type: z.enum(["PUBLIC", "PRIVATE"]),
   workspaceId: z.string(),
-  image: z.string().optional()
+  groupId: z.string().optional(),
+  image: z.string().optional(),
+  description: z.string().trim().max(2000).optional()
 });
 
 const joinChannelSchema = z.object({
@@ -24,8 +31,342 @@ const addMemberToChannelSchema = z.object({
 const updateChannelSchema = z.object({
   name: z.string().min(1).optional(),
   type: z.enum(["PUBLIC", "PRIVATE"]).optional(),
-  image: z.string().optional()
+  image: z.string().optional(),
+  description: z.string().trim().max(2000).optional()
 });
+
+const CHANNEL_ASSET_PREVIEW_LIMIT = 6;
+const linkRegex = /https?:\/\/[^\s<>"')]+/gi;
+
+function normalizeOptionalText(value?: string) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function isMediaMimeType(mimeType?: string | null) {
+  if (!mimeType) return false;
+  return mimeType.startsWith("image/") || mimeType.startsWith("video/");
+}
+
+function extractLinksFromText(content?: string | null) {
+  if (!content) return [];
+  const matches = content.match(linkRegex) ?? [];
+  return Array.from(new Set(matches));
+}
+
+async function buildChannelDetailPayload(channelId: string, userId: string) {
+  const channel = await prisma.channel.findFirst({
+    where: {
+      id: channelId,
+      deletedAt: null
+    },
+    include: {
+      workspace: true,
+      mutedByUsers: {
+        where: {
+          userId
+        },
+        select: {
+          id: true
+        }
+      },
+      _count: {
+        select: {
+          members: {
+            where: {
+              isActive: true
+            }
+          },
+          messages: {
+            where: {
+              deletedAt: null
+            }
+          }
+        }
+      },
+      members: {
+        where: {
+          isActive: true
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+              email: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: "asc"
+        }
+      }
+    }
+  });
+
+  if (!channel) {
+    return null;
+  }
+
+  const userChannelMembership = channel.members.find((m) => m.userId === userId);
+  if (!userChannelMembership) {
+    return { channel, isMember: false } as const;
+  }
+
+  const workspaceMembership = await prisma.member.findFirst({
+    where: {
+      userId,
+      workspaceId: channel.workspaceId,
+      isActive: true
+    },
+    select: {
+      role: true
+    }
+  });
+
+  // Shared / collab channels: if the link/group is no longer ACTIVE, only host-workspace
+  // members may open the channel (external collaborators lose access after revoke).
+  if (channel.collaborationId) {
+    const activeCollab = await prisma.workspaceCollaboration.findFirst({
+      where: { id: channel.collaborationId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (!activeCollab && !workspaceMembership) {
+      return { channel, isMember: false } as const;
+    }
+  }
+  if (channel.groupId) {
+    const activeGroup = await prisma.collaborationGroup.findFirst({
+      where: { id: channel.groupId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (!activeGroup && !workspaceMembership) {
+      return { channel, isMember: false } as const;
+    }
+  }
+
+  const memberUserIds = channel.members.map((member) => member.userId);
+  const workspaceMembers = memberUserIds.length > 0
+    ? await prisma.member.findMany({
+        where: {
+          workspaceId: channel.workspaceId,
+          userId: {
+            in: memberUserIds
+          },
+          isActive: true
+        },
+        select: {
+          userId: true,
+          role: true
+        }
+      })
+    : [];
+
+  const roleByUserId = new Map(workspaceMembers.map((member) => [member.userId, member.role]));
+
+  /** For shared / network channels: resolve each external member's home workspace display name (not the host workspace). */
+  const memberWorkspaceNameByUserId = new Map<string, string>();
+  const hostWorkspaceId = channel.workspaceId;
+  const isFederatedChannel = Boolean(channel.collaborationId || channel.groupId);
+  if (isFederatedChannel) {
+    let federatedWorkspaceIds: string[] = [];
+    if (channel.collaborationId) {
+      const collab = await prisma.workspaceCollaboration.findFirst({
+        where: { id: channel.collaborationId, status: "ACTIVE" },
+        select: { workspaceAId: true, workspaceBId: true },
+      });
+      if (collab) {
+        federatedWorkspaceIds = [collab.workspaceAId, collab.workspaceBId];
+      }
+    } else if (channel.groupId) {
+      const groupMemberships = await prisma.collaborationGroupMembership.findMany({
+        where: { groupId: channel.groupId, status: "ACTIVE" },
+        select: { workspaceId: true },
+      });
+      federatedWorkspaceIds = [...new Set(groupMemberships.map((m) => m.workspaceId))];
+    }
+
+    const externalUserIds = channel.members.filter((m) => m.isExternal).map((m) => m.userId);
+    if (federatedWorkspaceIds.length > 0 && externalUserIds.length > 0) {
+      const homeMemberships = await prisma.member.findMany({
+        where: {
+          userId: { in: externalUserIds },
+          workspaceId: { in: federatedWorkspaceIds },
+          isActive: true,
+        },
+        select: {
+          userId: true,
+          workspaceId: true,
+          workspace: { select: { name: true } },
+        },
+      });
+      for (const uid of externalUserIds) {
+        const candidates = homeMemberships.filter((m) => m.userId === uid);
+        const nonHost = candidates.find((c) => c.workspaceId !== hostWorkspaceId);
+        const chosen = nonHost ?? candidates[0];
+        const name = chosen?.workspace?.name?.trim();
+        if (name) {
+          memberWorkspaceNameByUserId.set(uid, name);
+        }
+      }
+    }
+  }
+
+  const attachmentMessages = await prisma.message.findMany({
+    where: {
+      channelId: channel.id,
+      deletedAt: null,
+      attachments: {
+        some: {}
+      }
+    },
+    select: {
+      id: true,
+      content: true,
+      createdAt: true,
+      userId: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          image: true
+        }
+      },
+      attachments: {
+        select: {
+          id: true,
+          filename: true,
+          originalName: true,
+          mimeType: true,
+          size: true,
+          url: true,
+          createdAt: true
+        }
+      }
+    },
+    orderBy: {
+      createdAt: "desc"
+    },
+    take: 50
+  });
+
+  const linkMessages = await prisma.message.findMany({
+    where: {
+      channelId: channel.id,
+      deletedAt: null,
+      content: {
+        contains: "http"
+      }
+    },
+    select: {
+      id: true,
+      content: true,
+      createdAt: true,
+      userId: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          image: true
+        }
+      }
+    },
+    orderBy: {
+      createdAt: "desc"
+    },
+    take: 50
+  });
+
+  const media = attachmentMessages
+    .flatMap((message) =>
+      message.attachments
+        .filter((attachment) => isMediaMimeType(attachment.mimeType))
+        .map((attachment) => ({
+          id: attachment.id,
+          messageId: message.id,
+          url: attachment.url,
+          filename: attachment.originalName || attachment.filename,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+          createdAt: attachment.createdAt.toISOString(),
+          sender: message.user
+        }))
+    )
+    .slice(0, CHANNEL_ASSET_PREVIEW_LIMIT);
+
+  const files = attachmentMessages
+    .flatMap((message) =>
+      message.attachments
+        .filter((attachment) => !isMediaMimeType(attachment.mimeType))
+        .map((attachment) => ({
+          id: attachment.id,
+          messageId: message.id,
+          url: attachment.url,
+          filename: attachment.originalName || attachment.filename,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+          createdAt: attachment.createdAt.toISOString(),
+          sender: message.user
+        }))
+    )
+    .slice(0, CHANNEL_ASSET_PREVIEW_LIMIT);
+
+  const links = linkMessages
+    .flatMap((message) =>
+      extractLinksFromText(message.content).map((url) => ({
+        id: `${message.id}:${url}`,
+        messageId: message.id,
+        url,
+        createdAt: message.createdAt.toISOString(),
+        sender: message.user
+      }))
+    )
+    .slice(0, CHANNEL_ASSET_PREVIEW_LIMIT);
+
+  const canSendAttachments = await canUserSendAttachmentsToChannel(channel.id, userId);
+  const currentUserRole = workspaceMembership?.role ?? null;
+  const isChannelCreator = channel.channelAdminId === userId;
+  const isWorkspaceAdmin = currentUserRole === "ADMIN" || currentUserRole === "MODERATOR";
+  const isProtectedChannel = ["general", "townhall"].includes(channel.name.toLowerCase());
+  const canEdit = !isProtectedChannel && (isChannelCreator || isWorkspaceAdmin);
+  const canManageMembers = !isProtectedChannel && (isChannelCreator || isWorkspaceAdmin);
+  const canLeave = !isProtectedChannel && !isChannelCreator;
+
+  return {
+    channel,
+    isMember: true,
+    data: {
+      ...channel,
+      description: channel.description,
+      canSendAttachments,
+      isMuted: channel.mutedByUsers.length > 0,
+      memberCount: channel._count.members,
+      messageCount: channel._count.messages,
+      permissions: {
+        canEdit,
+        canManageMembers,
+        canLeave,
+        isChannelCreator,
+        currentUserRole
+      },
+      members: channel.members.map((member) => ({
+        ...member,
+        workspaceRole: roleByUserId.get(member.userId) ?? null,
+        isChannelCreator: member.userId === channel.channelAdminId,
+        memberWorkspaceName:
+          member.isExternal && isFederatedChannel
+            ? memberWorkspaceNameByUserId.get(member.userId) ?? null
+            : null,
+      })),
+      preview: {
+        media,
+        files,
+        links
+      }
+    }
+  } as const;
+}
 
 export const createChannel = async (req: Request, res: Response) => {
   try {
@@ -50,11 +391,37 @@ export const createChannel = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 
+    if (payload.groupId) {
+      const group = await prisma.collaborationGroup.findFirst({
+        where: { id: payload.groupId, status: "ACTIVE" },
+        include: {
+          policy: {
+            select: { allowSharedChannels: true },
+          },
+          memberships: {
+            where: { workspaceId: payload.workspaceId, status: "ACTIVE" },
+            select: { id: true },
+          },
+        },
+      });
+      if (!group) {
+        return res.status(404).json({ message: "Collaboration group not found" });
+      }
+      if (!group.policy.allowSharedChannels) {
+        return res.status(403).json({ message: "Shared channels are disabled by group policy" });
+      }
+      if (group.memberships.length === 0) {
+        return res.status(403).json({ message: "Workspace is not an active member of this group" });
+      }
+    }
+
     const channel = await prisma.channel.create({
       data: {
         name: payload.name,
+        description: normalizeOptionalText(payload.description),
         type: payload.type,
         workspaceId: payload.workspaceId,
+        groupId: payload.groupId ?? undefined,
         image: payload.image,
         channelAdminId: user.id,
         members: {
@@ -64,6 +431,10 @@ export const createChannel = async (req: Request, res: Response) => {
         }
       }
     });
+
+    publishChannelEvent('channel.created', channel).catch((err) =>
+      console.error('[Streams] Failed to publish channel.created event:', err)
+    );
 
     return res.status(201).json({
       message: "Channel created successfully",
@@ -100,10 +471,12 @@ export const getWorkspaceChannels = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 
-    // Get channels where user is a member (excluding soft-deleted and bridge channels)
+    // Get channels where user is a member (excluding soft-deleted and bridge channels).
+    // - Local workspace channels: include non-collab channels, or collab channels only while link is ACTIVE
+    //   (avoids "ghost" shared channels after revoke).
+    // - Counterpart-hosted shared channels: include only when collaboration is ACTIVE and involves this workspace.
     const channels = await prisma.channel.findMany({
       where: {
-        workspaceId: workspaceId,
         deletedAt: null,
         isBridgeChannel: false,
         members: {
@@ -111,8 +484,50 @@ export const getWorkspaceChannels = async (req: Request, res: Response) => {
             userId: user.id,
             isActive: true
           }
-        }
-      }
+        },
+        OR: [
+          {
+            AND: [
+              { workspaceId: workspaceId },
+              {
+                OR: [
+                  { collaborationId: null, groupId: null },
+                  { collaboration: { status: "ACTIVE" } },
+                  { group: { status: "ACTIVE" } },
+                ],
+              },
+            ],
+          },
+          {
+            AND: [
+              { workspaceId: { not: workspaceId } },
+              { OR: [
+                  {
+                    collaboration: {
+                      status: "ACTIVE",
+                      OR: [{ workspaceAId: workspaceId }, { workspaceBId: workspaceId }],
+                    },
+                  },
+                  {
+                    group: {
+                      status: "ACTIVE",
+                      memberships: {
+                        some: {
+                          workspaceId,
+                          status: "ACTIVE",
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      orderBy: {
+        createdAt: "asc",
+      },
     });
 
     return res.status(200).json({
@@ -137,46 +552,13 @@ export const getChannel = async (req: Request, res: Response) => {
 
     const channelId = req.params.id;
 
-    const channel = await prisma.channel.findFirst({
-      where: {
-        id: channelId,
-        deletedAt: null
-      },
-      include: {
-        workspace: true,
-        members: {
-          where: {
-            isActive: true
-          },
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                image: true,
-                email: true
-              }
-            }
-          }
-        }
-      }
-    });
+    const result = await buildChannelDetailPayload(channelId, user.id);
 
-    if (!channel) {
+    if (!result) {
       return res.status(404).json({ message: "Channel not found" });
     }
 
-    // Check if user is a member of the channel (for bridge channels, external users are channel members but not workspace members)
-    const userChannelMembership = channel.members.find((m: { userId: string }) => m.userId === user.id);
-    if (userChannelMembership) {
-      // User is channel member - allow access (handles both workspace and bridge channel external members)
-      return res.status(200).json({
-        message: "Channel fetched successfully",
-        data: channel
-      });
-    }
-
-    // For non-bridge channels, require workspace membership
+    const { channel } = result;
     const member = await prisma.member.findFirst({
       where: {
         userId: user.id,
@@ -185,17 +567,17 @@ export const getChannel = async (req: Request, res: Response) => {
       }
     });
 
-    if (!member) {
+    if (!member && !channel.isBridgeChannel && !channel.collaborationId && !channel.groupId) {
       return res.status(403).json({ message: "You are not a member of this workspace" });
     }
-    const channelMemberCheck = channel.members.find((m: { userId: string }) => m.userId === user.id);
-    if (!channelMemberCheck) {
+
+    if (!result.isMember) {
       return res.status(403).json({ message: "You are not a member of this channel" });
     }
 
     return res.status(200).json({
       message: "Channel fetched successfully",
-      data: channel
+      data: result.data,
     });
   } catch (error) {
     if (error instanceof ZodError) {
@@ -264,19 +646,34 @@ export const joinChannel = async (req: Request, res: Response) => {
 
     let channelMember;
     if (previouslyRemoved) {
-      channelMember = await prisma.channelMember.update({
-        where: { id: previouslyRemoved.id },
-        data: { isActive: true }
+      channelMember = await prisma.$transaction(async (tx) => {
+        const updated = await tx.channelMember.update({
+          where: { id: previouslyRemoved.id },
+          data: { isActive: true }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+          userId: user.id,
+          channelId: channel.id,
+          action: "add",
+        });
+        return updated;
       });
     } else {
-      channelMember = await prisma.channelMember.create({
-        data: {
+      channelMember = await prisma.$transaction(async (tx) => {
+        const created = await tx.channelMember.create({
+          data: {
+            userId: user.id,
+            channelId: channel.id
+          }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
           userId: user.id,
-          channelId: channel.id
-        }
+          channelId: channel.id,
+          action: "add",
+        });
+        return created;
       });
     }
-
     return res.status(200).json({
       message: "Joined channel successfully",
       data: channelMember
@@ -317,27 +714,8 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Channel not found" });
     }
 
-    // Check if the requesting user is a member of the workspace
-    const requestingMember = await prisma.member.findFirst({
-      where: {
-        userId: user.id,
-        workspaceId: channel.workspaceId,
-        isActive: true
-      }
-    });
-
-    if (!requestingMember) {
-      return res.status(403).json({ message: "You are not a member of this workspace" });
-    }
-
-    // Bridge channel: admin, moderator, or channel creator can add same-workspace (same domain) users without email invite
-    if (channel.isBridgeChannel) {
-      const isChannelCreator = channel.channelAdminId === user.id;
-      const isAdminOrMod = requestingMember.role === "ADMIN" || requestingMember.role === "MODERATOR";
-      if (!isChannelCreator && !isAdminOrMod) {
-        return res.status(403).json({ message: "Only the channel creator, workspace admin, or moderator can add members to this bridge channel" });
-      }
-
+    // Bridge/shared collaboration channels can include members from linked workspaces.
+    if (channel.isBridgeChannel || !!channel.collaborationId || !!(channel as any).groupId) {
       const requestingChannelMember = await prisma.channelMember.findFirst({
         where: { userId: user.id, channelId: channel.id, isActive: true }
       });
@@ -345,12 +723,83 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
         return res.status(403).json({ message: "You are not a member of this channel" });
       }
 
-      const targetMember = await prisma.member.findFirst({
-        where: { userId: payload.userId, workspaceId: channel.workspaceId, isActive: true }
+      const targetChannel = await prisma.channel.findFirst({
+        where: { id: channel.id },
+        select: { collaborationId: true, groupId: true, workspaceId: true, channelAdminId: true },
       });
-      if (!targetMember) {
-        return res.status(400).json({ message: "User is not in this workspace. Only workspace members can be added from the popup; use email invite for external users." });
+      if (!targetChannel) {
+        return res.status(404).json({ message: "Channel not found" });
       }
+
+      const sourceWorkspaceId = targetChannel.workspaceId;
+      const isChannelCreator = targetChannel.channelAdminId === user.id;
+      const isSourceWorkspaceAdmin = await isWorkspaceAdmin(user.id, sourceWorkspaceId);
+
+      let isCounterpartWorkspaceAdmin = false;
+      let policyAllowsSharedChannels = false;
+      let candidateWorkspaceIds: string[] = [sourceWorkspaceId];
+
+      if (targetChannel.groupId) {
+        // Group channel: all ACTIVE member workspaces are candidates
+        const groupMemberships = await prisma.collaborationGroupMembership.findMany({
+          where: { groupId: targetChannel.groupId, status: "ACTIVE" },
+          select: { workspaceId: true },
+        });
+        candidateWorkspaceIds = groupMemberships.map((m) => m.workspaceId);
+        // Check if caller is an admin in any member workspace
+        const adminChecks = await Promise.all(
+          candidateWorkspaceIds.map((wsId) => isWorkspaceAdmin(user.id, wsId))
+        );
+        isCounterpartWorkspaceAdmin = adminChecks.some(Boolean);
+        policyAllowsSharedChannels = true; // policy was checked at group channel creation
+      } else if (targetChannel.collaborationId) {
+        const collaboration = await prisma.workspaceCollaboration.findFirst({
+          where: { id: targetChannel.collaborationId, status: "ACTIVE" },
+          include: { policy: { select: { allowSharedChannels: true } } },
+        });
+        if (collaboration) {
+          const counterpartWorkspaceId =
+            collaboration.workspaceAId === sourceWorkspaceId
+              ? collaboration.workspaceBId
+              : collaboration.workspaceAId;
+          isCounterpartWorkspaceAdmin = await isWorkspaceAdmin(user.id, counterpartWorkspaceId);
+          policyAllowsSharedChannels = collaboration.policy.allowSharedChannels;
+          candidateWorkspaceIds = [sourceWorkspaceId, counterpartWorkspaceId];
+        }
+      }
+
+      if (!isChannelCreator && !isSourceWorkspaceAdmin && !isCounterpartWorkspaceAdmin) {
+        return res.status(403).json({
+          message:
+            "Only channel creator or linked workspace admins can add members to this shared channel",
+        });
+      }
+
+      if (targetChannel.collaborationId && !policyAllowsSharedChannels) {
+        return res.status(403).json({ message: "Shared channels are disabled by collaboration policy" });
+      }
+
+      const targetMemberships = await prisma.member.findMany({
+        where: {
+          userId: payload.userId,
+          workspaceId: {
+            in: candidateWorkspaceIds,
+          },
+          isActive: true,
+        },
+        select: {
+          workspaceId: true,
+        },
+      });
+
+      if (!targetMemberships.length) {
+        return res.status(400).json({
+          message: "User must belong to one of the linked workspaces",
+        });
+      }
+
+      const targetWorkspaceId = targetMemberships[0].workspaceId;
+      const isExternal = targetWorkspaceId !== sourceWorkspaceId;
 
       const existingActiveMember = await prisma.channelMember.findFirst({
         where: { userId: payload.userId, channelId: channel.id, isActive: true }
@@ -363,9 +812,16 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
         where: { userId: payload.userId, channelId: channel.id, isActive: false }
       });
       if (inactiveMembership) {
-        await prisma.channelMember.updateMany({
-          where: { userId: payload.userId, channelId: channel.id },
-          data: { isActive: true, isExternal: false }
+        await prisma.$transaction(async (tx) => {
+          await tx.channelMember.updateMany({
+            where: { userId: payload.userId, channelId: channel.id },
+            data: { isActive: true, isExternal }
+          });
+          await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+            userId: payload.userId,
+            channelId: channel.id,
+            action: "add",
+          });
         });
         const updated = await prisma.channelMember.findFirst({
           where: { userId: payload.userId, channelId: channel.id }
@@ -376,17 +832,38 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
         });
       }
 
-      const newChannelMember = await prisma.channelMember.create({
-        data: {
+      const newChannelMember = await prisma.$transaction(async (tx) => {
+        const created = await tx.channelMember.create({
+          data: {
+            userId: payload.userId,
+            channelId: channel.id,
+            isExternal
+          }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
           userId: payload.userId,
           channelId: channel.id,
-          isExternal: false
-        }
+          action: "add",
+        });
+        return created;
       });
       return res.status(200).json({
         message: "Member added to channel successfully",
         data: newChannelMember
       });
+    }
+
+    // Check if the requesting user is a member of the workspace for non-bridge channels
+    const requestingMember = await prisma.member.findFirst({
+      where: {
+        userId: user.id,
+        workspaceId: channel.workspaceId,
+        isActive: true
+      }
+    });
+
+    if (!requestingMember) {
+      return res.status(403).json({ message: "You are not a member of this workspace" });
     }
 
     // Non-bridge: only private channels
@@ -443,9 +920,16 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
     });
 
     if (inactiveMembership) {
-      await prisma.channelMember.updateMany({
-        where: { userId: payload.userId, channelId: channel.id },
-        data: { isActive: true }
+      await prisma.$transaction(async (tx) => {
+        await tx.channelMember.updateMany({
+          where: { userId: payload.userId, channelId: channel.id },
+          data: { isActive: true }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+          userId: payload.userId,
+          channelId: channel.id,
+          action: "add",
+        });
       });
       return res.status(200).json({
         message: "Member added to channel successfully",
@@ -454,13 +938,20 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
     }
 
     // Add the user to the channel (new membership)
-    const newChannelMember = await prisma.channelMember.create({
-      data: {
+    const newChannelMember = await prisma.$transaction(async (tx) => {
+      const created = await tx.channelMember.create({
+        data: {
+          userId: payload.userId,
+          channelId: channel.id
+        }
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
         userId: payload.userId,
-        channelId: channel.id
-      }
+        channelId: channel.id,
+        action: "add",
+      });
+      return created;
     });
-
     return res.status(200).json({
       message: "Member added to channel successfully",
       data: newChannelMember
@@ -513,9 +1004,16 @@ export const removeMemberFromChannel = async (req: Request, res: Response) => {
           message: "You created this channel. Transfer ownership to another member or delete the channel before leaving."
         });
       }
-      await prisma.channelMember.updateMany({
-        where: { channelId, userId: targetUserId },
-        data: { isActive: false }
+      await prisma.$transaction(async (tx) => {
+        await tx.channelMember.updateMany({
+          where: { channelId, userId: targetUserId },
+          data: { isActive: false }
+        });
+        await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+          userId: targetUserId,
+          channelId,
+          action: "remove",
+        });
       });
       return res.status(200).json({ message: "You have left the channel" });
     }
@@ -546,9 +1044,16 @@ export const removeMemberFromChannel = async (req: Request, res: Response) => {
       }
     }
 
-    await prisma.channelMember.updateMany({
-      where: { channelId, userId: targetUserId },
-      data: { isActive: false }
+    await prisma.$transaction(async (tx) => {
+      await tx.channelMember.updateMany({
+        where: { channelId, userId: targetUserId },
+        data: { isActive: false }
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+        userId: targetUserId,
+        channelId,
+        action: "remove",
+      });
     });
 
     return res.status(200).json({ message: "Member removed from channel successfully" });
@@ -617,9 +1122,14 @@ export const updateChannel = async (req: Request, res: Response) => {
         name: payload.name,
         type: payload.type,
         image: payload.image,
+        description: payload.description !== undefined ? normalizeOptionalText(payload.description) : undefined,
         updatedAt: new Date()
       }
     });
+
+    publishChannelEvent('channel.updated', updatedChannel).catch((err) =>
+      console.error('[Streams] Failed to publish channel.updated event:', err)
+    );
 
     return res.status(200).json({
       message: "Channel updated successfully",
@@ -681,7 +1191,7 @@ export const softDeleteChannel = async (req: Request, res: Response) => {
     }
 
     // Soft delete the channel by setting deletedAt timestamp
-    await prisma.channel.update({
+    const deletedChannel = await prisma.channel.update({
       where: {
         id: channelId
       },
@@ -689,6 +1199,10 @@ export const softDeleteChannel = async (req: Request, res: Response) => {
         deletedAt: new Date()
       }
     });
+
+    publishChannelEvent('channel.deleted', deletedChannel).catch((err) =>
+      console.error('[Streams] Failed to publish channel.deleted event:', err)
+    );
 
     return res.status(200).json({
       message: "Channel soft deleted successfully. All messages and reactions are preserved."
@@ -864,6 +1378,10 @@ export const createBridgeChannel = async (req: Request, res: Response) => {
         }
       }
     });
+
+    publishChannelEvent('channel.created', channel).catch((err) =>
+      console.error('[Streams] Failed to publish channel.created event:', err)
+    );
 
     return res.status(201).json({ message: "Bridge channel created successfully", data: channel });
   } catch (error) {
@@ -1052,17 +1570,24 @@ export const acceptBridgeInvite = async (req: Request, res: Response) => {
       });
     }
 
-    await prisma.channelMember.create({
-      data: {
-        channelId: invite.channelId,
-        userId: inviteeUser.id,
-        isExternal: true
-      }
-    });
+    await prisma.$transaction(async (tx) => {
+      await tx.channelMember.create({
+        data: {
+          channelId: invite.channelId,
+          userId: inviteeUser.id,
+          isExternal: true
+        }
+      });
 
-    await prisma.channelInvite.update({
-      where: { id: invite.id },
-      data: { status: "ACCEPTED", acceptedAt: new Date() }
+      await tx.channelInvite.update({
+        where: { id: invite.id },
+        data: { status: "ACCEPTED", acceptedAt: new Date() }
+      });
+      await enqueueMembershipOutboxEvent(tx, "membership.channel.updated", {
+        userId: inviteeUser.id,
+        channelId: invite.channelId,
+        action: "add",
+      });
     });
 
     return res.status(200).json({

@@ -1,6 +1,9 @@
 import { Server } from 'http';
 import prisma from '../config/database.js';
-import { checkMessageRateLimit } from '../services/rate-limiter.js';
+import {
+  checkMessageRateLimit,
+  getSocketMessageRateLimitConfig,
+} from '../services/rate-limiter.js';
 import {
   removeClientFromAllChannels,
   addClientToChannel,
@@ -8,6 +11,8 @@ import {
   addClientToConversation,
   validateChannelMembership,
   validateConversationParticipation,
+  validateWorkspaceMembership,
+  getWorkspaceRoomKey,
 } from './utils.js';
 import {
   handleSendMessage,
@@ -26,6 +31,8 @@ import {
 } from './handlers/direct-message.handler.js';
 import { handleMarkAsRead } from './handlers/mark-as-read.handler.js';
 import { createWsServer, type IoLike, type SocketLike } from './ws-compat.js';
+import { warmMembershipCacheForUser } from '../services/socket-membership-cache.service.js';
+import { checkSocketEventRateLimitDistributed } from '../services/socket-event-rate-limiter.service.js';
 
 // Global state for managing connections
 let io: IoLike;
@@ -148,6 +155,7 @@ const handleConnection = (socket: SocketLike): void => {
   // Populated on join_* events after validation.
   (socket.data as any).allowedChannels = new Set<string>();
   (socket.data as any).allowedConversations = new Set<string>();
+  (socket.data as any).allowedWorkspaces = new Set<string>();
 
   // Personal room for direct messaging + notifications
   socket.join(`user_${user.id}`);
@@ -156,11 +164,9 @@ const handleConnection = (socket: SocketLike): void => {
   userSockets.set(socket.id, user.id);
   broadcastUserOnlineStatus(user.id, true);
 
-  socket.emit('authenticated', {
-    userId: user.id,
-    user: { id: user.id, name: user.name, email: user.email },
-  });
-
+  // Register handlers before `authenticated` so join_* events are never missed.
+  // Membership cache must be warm before the client runs join_workspace; otherwise
+  // validateWorkspaceMembershipCached can see Redis miss and reject valid members.
   socket.on('send_message', async (data) => handleSendMessageEvent(socket, data));
   socket.on('edit_message', async (data) => handleEditMessageEvent(socket, data));
   socket.on('delete_message', async (data) => handleDeleteMessageEvent(socket, data));
@@ -210,6 +216,27 @@ const handleConnection = (socket: SocketLike): void => {
     socket.emit('conversation_joined', { conversationId });
   });
 
+  socket.on('join_workspace', async (data) => {
+    const { workspaceId } = data || {};
+    if (!workspaceId) return;
+    const isMember = await validateWorkspaceMembership(user.id, workspaceId);
+    if (!isMember) {
+      socket.emit('error', { message: 'You are not a member of this workspace' });
+      return;
+    }
+    (socket.data as any).allowedWorkspaces?.add(workspaceId);
+    socket.join(getWorkspaceRoomKey(workspaceId));
+    socket.emit('joined_workspace', { workspaceId });
+  });
+
+  socket.on('leave_workspace', (data) => {
+    const { workspaceId } = data || {};
+    if (!workspaceId) return;
+    (socket.data as any).allowedWorkspaces?.delete(workspaceId);
+    socket.leave(getWorkspaceRoomKey(workspaceId));
+    socket.emit('left_workspace', { workspaceId });
+  });
+
   socket.on('leave_conversation', (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
@@ -218,24 +245,27 @@ const handleConnection = (socket: SocketLike): void => {
     socket.emit('conversation_left', { conversationId });
   });
 
-  socket.on('typing_start', (data) => {
+  socket.on('typing_start', async (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'typing'))) return;
     // DB-free hot path: only allow typing if the socket joined + was validated
     if (!(socket.data as any).allowedChannels?.has(channelId)) return;
     socket.to(channelId).emit('typing_start', { userId: user.id, userName: user.name, channelId });
   });
 
-  socket.on('typing_stop', (data) => {
+  socket.on('typing_stop', async (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'typing'))) return;
     if (!(socket.data as any).allowedChannels?.has(channelId)) return;
     socket.to(channelId).emit('typing_stop', { userId: user.id, userName: user.name, channelId });
   });
 
-  socket.on('direct_typing_start', (data) => {
+  socket.on('direct_typing_start', async (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'typing'))) return;
     if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
     socket.to(conversationId).emit('direct_typing_start', {
       userId: user.id,
@@ -244,9 +274,10 @@ const handleConnection = (socket: SocketLike): void => {
     });
   });
 
-  socket.on('direct_typing_stop', (data) => {
+  socket.on('direct_typing_stop', async (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'typing'))) return;
     if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
     socket.to(conversationId).emit('direct_typing_stop', {
       userId: user.id,
@@ -260,6 +291,10 @@ const handleConnection = (socket: SocketLike): void => {
   });
 
   socket.on('mark_as_read', async (data) => {
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'presence'))) {
+      socket.emit('error', { message: 'Rate limit exceeded. Please slow down.' });
+      return;
+    }
     await handleMarkAsRead(socket as any, data);
   });
 
@@ -272,12 +307,30 @@ const handleConnection = (socket: SocketLike): void => {
     console.error('Socket error:', error);
     handleDisconnection(socket);
   });
+
+  void (async () => {
+    try {
+      await warmMembershipCacheForUser(user.id);
+    } catch (error) {
+      console.error('[socket] Failed to warm membership cache:', error);
+    }
+
+    socket.emit('authenticated', {
+      userId: user.id,
+      user: { id: user.id, name: user.name, email: user.email },
+    });
+  })();
 };
 
-const rateLimitOrError = (socket: SocketLike) => {
+const rateLimitOrError = async (socket: SocketLike) => {
   const user = socket.data.user as any;
   if (!user?.id) return false;
-  if (!checkMessageRateLimit(user.id, 1_000_000, 60 * 60 * 1000)) {
+  if (!(await checkSocketEventRateLimitDistributed(user.id, 'message'))) {
+    socket.emit('error', { message: 'Rate limit exceeded. Please slow down.' });
+    return false;
+  }
+  const { maxMessages, windowMs } = getSocketMessageRateLimitConfig();
+  if (!checkMessageRateLimit(user.id, maxMessages, windowMs)) {
     socket.emit('error', { message: 'Rate limit exceeded. Please slow down.' });
     return false;
   }
@@ -286,7 +339,7 @@ const rateLimitOrError = (socket: SocketLike) => {
 
 const handleSendMessageEvent = async (socket: SocketLike, data: any): Promise<void> => {
   try {
-    if (!rateLimitOrError(socket)) return;
+    if (!(await rateLimitOrError(socket))) return;
     addClientToChannel(socket, data.channelId, channelClients);
     await handleSendMessage(socket as any, data, channelClients as any, io as any);
   } catch (error) {
@@ -351,7 +404,7 @@ const handleRemoveReactionEvent = async (socket: SocketLike, data: any): Promise
 
 const handleSendDirectMessageEvent = async (socket: SocketLike, data: any): Promise<void> => {
   try {
-    if (!rateLimitOrError(socket)) return;
+    if (!(await rateLimitOrError(socket))) return;
     addClientToConversation(socket, data.conversationId, conversationClients);
     await handleSendDirectMessage(socket as any, data, conversationClients as any, io as any);
   } catch (error) {
