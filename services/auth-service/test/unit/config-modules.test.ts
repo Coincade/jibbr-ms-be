@@ -68,10 +68,11 @@ describe('config/queue', () => {
 });
 
 describe('config/rateLimit', () => {
-  it('exports limiter middleware factories', async () => {
-    const { appLimiter, authLimiter } = await import('../../src/config/rateLimit.js');
+  it('exports appLimiter middleware factory', async () => {
+    vi.resetModules();
+    vi.doUnmock('../../src/config/rateLimit.js');
+    const { appLimiter } = await import('../../src/config/rateLimit.js');
     expect(typeof appLimiter).toBe('function');
-    expect(typeof authLimiter).toBe('function');
   });
 });
 

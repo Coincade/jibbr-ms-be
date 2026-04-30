@@ -18,17 +18,11 @@ vi.mock('../../src/jobs/EmailJob.js', () => ({
 import prisma from '../../src/config/database.js';
 import { renderEmailEjs } from '../../src/helper.js';
 import { emailQueue, emailQueueName } from '../../src/jobs/EmailJob.js';
+import { createRes } from '../utils/http.js';
 import {
   checkEmailRegistered,
   sendBridgeInviteEmail,
 } from '../../src/controllers/internal.controller.js';
-
-function createRes() {
-  const res: any = {};
-  res.status = vi.fn(() => res);
-  res.json = vi.fn(() => res);
-  return res;
-}
 
 beforeEach(() => {
   vi.clearAllMocks();

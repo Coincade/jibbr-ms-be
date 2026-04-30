@@ -1,26 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 
-vi.mock('../../src/config/rateLimit.js', () => {
+vi.mock('../src/config/rateLimit.js', () => {
   return {
     appLimiter: (_req: any, _res: any, next: any) => next(),
-    authLimiter: (_req: any, _res: any, next: any) => next(),
+    readHeavyLimiter: (_req: any, _res: any, next: any) => next(),
+    isReadHeavyRequest: () => false,
   };
 });
 
-import { createAuthApp } from '../../src/app.js';
+import { createMessagingApp } from '../src/app.js';
 
-
-describe('Auth App (App.ts)', () => {
+describe('Messaging App (app.ts)', () => {
   it('GET /health returns healthy payload (default dbConnected=true)', async () => {
-    const app = createAuthApp();
+    const app = createMessagingApp();
 
     const res = await request(app).get('/health');
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       status: 'healthy',
-      service: 'auth-service',
+      service: 'messaging-service',
       dbConnected: true,
     });
     expect(res.body.timestamp).toEqual(expect.any(String));
@@ -29,7 +29,7 @@ describe('Auth App (App.ts)', () => {
   });
 
   it('GET /health bypasses db-unavailable middleware', async () => {
-    const app = createAuthApp({
+    const app = createMessagingApp({
       isDbConnected: () => false,
     });
 
@@ -38,13 +38,13 @@ describe('Auth App (App.ts)', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       status: 'healthy',
-      service: 'auth-service',
+      service: 'messaging-service',
       dbConnected: false,
     });
   });
 
   it('returns 503 for non-health routes when db is unavailable', async () => {
-    const app = createAuthApp({
+    const app = createMessagingApp({
       isDbConnected: () => false,
     });
 
@@ -58,7 +58,7 @@ describe('Auth App (App.ts)', () => {
   });
 
   it('passes db middleware for non-health routes when db is available', async () => {
-    const app = createAuthApp({
+    const app = createMessagingApp({
       isDbConnected: () => true,
     });
 
@@ -67,14 +67,4 @@ describe('Auth App (App.ts)', () => {
     // Route does not exist, but middleware should pass through (not 503).
     expect(res.status).toBe(404);
   });
-
-  it('sets view engine and views when viewsPath is provided', () => {
-    const app = createAuthApp({
-      viewsPath: 'C:\\tmp\\views',
-    });
-
-    expect(app.get('view engine')).toBe('ejs');
-    expect(app.get('views')).toBe('C:\\tmp\\views');
-  });
 });
-
