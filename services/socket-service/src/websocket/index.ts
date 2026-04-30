@@ -164,15 +164,9 @@ const handleConnection = (socket: SocketLike): void => {
   userSockets.set(socket.id, user.id);
   broadcastUserOnlineStatus(user.id, true);
 
-  warmMembershipCacheForUser(user.id).catch((error) => {
-    console.error('[socket] Failed to warm membership cache:', error);
-  });
-
-  socket.emit('authenticated', {
-    userId: user.id,
-    user: { id: user.id, name: user.name, email: user.email },
-  });
-
+  // Register handlers before `authenticated` so join_* events are never missed.
+  // Membership cache must be warm before the client runs join_workspace; otherwise
+  // validateWorkspaceMembershipCached can see Redis miss and reject valid members.
   socket.on('send_message', async (data) => handleSendMessageEvent(socket, data));
   socket.on('edit_message', async (data) => handleEditMessageEvent(socket, data));
   socket.on('delete_message', async (data) => handleDeleteMessageEvent(socket, data));
@@ -313,6 +307,19 @@ const handleConnection = (socket: SocketLike): void => {
     console.error('Socket error:', error);
     handleDisconnection(socket);
   });
+
+  void (async () => {
+    try {
+      await warmMembershipCacheForUser(user.id);
+    } catch (error) {
+      console.error('[socket] Failed to warm membership cache:', error);
+    }
+
+    socket.emit('authenticated', {
+      userId: user.id,
+      user: { id: user.id, name: user.name, email: user.email },
+    });
+  })();
 };
 
 const rateLimitOrError = async (socket: SocketLike) => {

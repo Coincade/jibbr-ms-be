@@ -215,15 +215,20 @@ export const validateConversationParticipationCached = async (
 
 export const validateWorkspaceMembershipCached = async (userId: string, workspaceId: string): Promise<boolean> => {
   const redisResult = await safeRedisMembershipCheck(userWorkspacesKey(userId), workspaceId);
-  if (redisResult !== null) return redisResult;
+  if (redisResult === true) return true;
 
-  return fallbackMembershipCheck(async () => {
+  // Redis false or unreadable: key missing / pre-warm / eviction — sIsMember on an empty/missing key
+  // yields false; confirm with DB so legitimate members never get socket `join_workspace` errors.
+  try {
     const member = await prisma.member.findFirst({
       where: { userId, workspaceId, isActive: true },
       select: { id: true },
     });
     return !!member;
-  });
+  } catch (error) {
+    console.error('[membership-cache] validateWorkspaceMembership DB check failed:', error);
+    return false;
+  }
 };
 
 export const applyChannelMembershipUpdate = async (
