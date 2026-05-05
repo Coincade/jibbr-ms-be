@@ -26,6 +26,10 @@
       "dependsOn": ["build"],
       "outputs": []
     },
+    "test:unit": {
+      "dependsOn": ["build"],
+      "outputs": []
+    },
     "lint": {
       "outputs": []
     },

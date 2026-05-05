@@ -188,7 +188,6 @@ jobs:
           doctl apps update-component ${{ secrets[matrix.app_id_secret] }} \
             --component-name ${{ matrix.service }} \
             --image-tag ${{ github.sha }}
-        continue-on-error: true   # fall back to force-deploy if update-component is unsupported
 
       - name: Trigger deployment
         run: |
@@ -216,15 +215,21 @@ jobs:
     name: Smoke Test
     runs-on: ubuntu-latest
     needs: deploy
+    environment: staging
+    env:
+      STAGING_AUTH_URL: ${{ secrets.STAGING_AUTH_URL }}
+      STAGING_UPLOAD_URL: ${{ secrets.STAGING_UPLOAD_URL }}
+      STAGING_MESSAGING_URL: ${{ secrets.STAGING_MESSAGING_URL }}
+      STAGING_SOCKET_URL: ${{ secrets.STAGING_SOCKET_URL }}
 
     steps:
       - name: Health-check all services
         run: |
           services=(
-            "https://jibbr-auth-service-qg7e2.ondigitalocean.app/health"
-            "https://jibbr-upload-service-qg7e2.ondigitalocean.app/health"
-            "https://jibbr-messaging-service-qg7e2.ondigitalocean.app/health"
-            "https://jibbr-socket-service-qg7e2.ondigitalocean.app/health"
+            "${STAGING_AUTH_URL}/health"
+            "${STAGING_UPLOAD_URL}/health"
+            "${STAGING_MESSAGING_URL}/health"
+            "${STAGING_SOCKET_URL}/health"
           )
           for url in "${services[@]}"; do
             echo "Checking $url"
