@@ -1,5 +1,5 @@
 # ── Stage 1: install & build ────────────────────────────────────────────────
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 RUN apk add --no-cache openssl
 
@@ -8,6 +8,7 @@ WORKDIR /app
 COPY package*.json turbo.json ./
 COPY packages/auth-middleware/package*.json packages/auth-middleware/
 COPY packages/database/package*.json           packages/database/
+COPY packages/database/prisma/                 packages/database/prisma/
 COPY packages/logger/package*.json             packages/logger/
 COPY packages/rate-limit/package*.json         packages/rate-limit/
 COPY packages/shared-types/package*.json       packages/shared-types/
@@ -23,7 +24,7 @@ RUN npx turbo run db:generate --filter=socket-service
 RUN npx turbo run build --filter=socket-service
 
 # ── Stage 2: production image ────────────────────────────────────────────────
-FROM node:18-alpine AS runner
+FROM node:20-alpine AS runner
 
 RUN apk add --no-cache openssl
 
