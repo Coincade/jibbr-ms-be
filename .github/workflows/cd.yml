@@ -10,8 +10,8 @@ concurrency:
 
 env:
   NODE_VERSION: '20'
-  REGISTRY: registry.digitalocean.com
-  DO_REGISTRY: ${{ secrets.DO_REGISTRY_NAME }}
+  REGISTRY: docker.io
+  DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ jobs:
               - 'turbo.json'
 
   # ─────────────────────────────────────────────────────────────────────────
-  # 2. Build & push Docker images to DigitalOcean Container Registry
+  # 2. Build & push Docker images to Docker Hub
   # ─────────────────────────────────────────────────────────────────────────
   build-and-push:
     name: Build & Push — ${{ matrix.service }}
@@ -87,25 +87,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
         with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-
-      - name: Log in to DigitalOcean Container Registry
-        run: doctl registry login --expiry-seconds 1200
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set image tag
         id: tag
-        run: echo "IMAGE=${{ env.REGISTRY }}/${{ env.DO_REGISTRY }}/${{ matrix.service }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+        run: echo "IMAGE=${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.service }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
       - name: Build Docker image
         run: |
           docker build \
             --file services/${{ matrix.service }}/Dockerfile \
             --tag ${{ steps.tag.outputs.IMAGE }} \
-            --tag ${{ env.REGISTRY }}/${{ env.DO_REGISTRY }}/${{ matrix.service }}:latest \
-            --cache-from ${{ env.REGISTRY }}/${{ env.DO_REGISTRY }}/${{ matrix.service }}:latest \
+            --tag ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.service }}:latest \
+            --cache-from ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.service }}:latest \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             .
         env:
@@ -114,7 +112,7 @@ jobs:
       - name: Push Docker image
         run: |
           docker push ${{ steps.tag.outputs.IMAGE }}
-          docker push ${{ env.REGISTRY }}/${{ env.DO_REGISTRY }}/${{ matrix.service }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.service }}:latest
 
       - name: Save image tag to output
         id: save
@@ -122,7 +120,7 @@ jobs:
 
     outputs:
       # individual matrix jobs don't share outputs natively; deploy job reads the SHA directly
-      image_prefix: ${{ env.REGISTRY }}/${{ env.DO_REGISTRY }}
+      image_prefix: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}
 
   # ─────────────────────────────────────────────────────────────────────────
   # 3. Run Prisma migrations (single job, runs once against prod DB)
