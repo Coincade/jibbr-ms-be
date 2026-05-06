@@ -183,9 +183,22 @@ jobs:
 
       - name: Update App Platform image tag
         run: |
-          doctl apps update-component ${{ secrets[matrix.app_id_secret] }} \
-            --component-name ${{ matrix.service }} \
-            --image-tag ${{ github.sha }}
+          APP_ID="${{ secrets[matrix.app_id_secret] }}"
+          TMP_SPEC="$(mktemp)"
+
+          doctl apps get "$APP_ID" --format Spec --no-header | jq \
+            --arg component "${{ matrix.service }}" \
+            --arg tag "${{ github.sha }}" \
+            '
+              .services = (.services // [] | map(
+                if .name == $component and .image != null
+                then .image.tag = $tag | .
+                else .
+                end
+              ))
+            ' > "$TMP_SPEC"
+
+          doctl apps update "$APP_ID" --spec "$TMP_SPEC"
 
       - name: Trigger deployment
         run: |
