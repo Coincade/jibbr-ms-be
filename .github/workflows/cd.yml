@@ -185,8 +185,13 @@ jobs:
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
           TMP_SPEC="$(mktemp)"
+          APP_JSON="$(mktemp)"
 
-          doctl apps get "$APP_ID" --format Spec --no-header | jq \
+          doctl apps get "$APP_ID" -o json > "$APP_JSON"
+
+          jq -e 'length > 0 and .[0].spec != null' "$APP_JSON" >/dev/null
+
+          jq -e '.[0].spec' "$APP_JSON" | jq \
             --arg component "${{ matrix.service }}" \
             --arg tag "${{ github.sha }}" \
             '

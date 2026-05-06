@@ -6,6 +6,10 @@ import { fileURLToPath } from 'url';
 import moment from "moment";
 import prisma from "./config/database.js";
 
+const resolveAttachmentFlag = (value: unknown): boolean => {
+    return typeof value === "boolean" ? value : true;
+};
+
 export const formatError = (error: ZodError) => {
     let errors:any = {};
 
@@ -47,7 +51,7 @@ export const isFileAttachmentsEnabled = async (workspaceId: string): Promise<boo
             },
         });
 
-        return workspace?.fileAttachmentsEnabled ?? true; // Default to true if workspace not found
+        return resolveAttachmentFlag(workspace?.fileAttachmentsEnabled); // Default to true if workspace not found
     } catch (error) {
         console.error('Error checking file attachments setting:', error);
         return true; // Default to true on error
@@ -75,7 +79,7 @@ export const isFileAttachmentsEnabledForChannel = async (channelId: string): Pro
             },
         });
 
-        return channel?.workspace?.fileAttachmentsEnabled ?? true; // Default to true if channel/workspace not found
+        return resolveAttachmentFlag(channel?.workspace?.fileAttachmentsEnabled); // Default to true if channel/workspace not found
     } catch (error) {
         console.error('Error checking file attachments setting for channel:', error);
         return true; // Default to true on error
@@ -102,7 +106,7 @@ export const isFileAttachmentsEnabledForConversation = async (conversationId: st
             },
         });
 
-        return conversation?.workspace?.fileAttachmentsEnabled ?? true;
+        return resolveAttachmentFlag(conversation?.workspace?.fileAttachmentsEnabled);
     } catch (error) {
         console.error('Error checking file attachments setting for conversation:', error);
         return true; // Default to true on error
