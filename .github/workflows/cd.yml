@@ -206,22 +206,42 @@ jobs:
           doctl apps update "$APP_ID" --spec "$TMP_SPEC"
 
       - name: Trigger deployment
+        id: deploy_trigger
         run: |
-          doctl apps create-deployment ${{ secrets[matrix.app_id_secret] }}
+          APP_ID="${{ secrets[matrix.app_id_secret] }}"
+          DEPLOYMENT_ID=$(doctl apps create-deployment "$APP_ID" -o json | jq -r '.[0].id // .id // empty')
+
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "Failed to read deployment ID from doctl output"
+            exit 1
+          fi
+
+          echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployment to go live
         run: |
-          echo "Waiting for ${{ matrix.service }} to reach ACTIVE state..."
-          for i in $(seq 1 30); do
-            STATUS=$(doctl apps get ${{ secrets[matrix.app_id_secret] }} --format ActiveDeployment.Phase --no-header 2>/dev/null || echo "UNKNOWN")
+          APP_ID="${{ secrets[matrix.app_id_secret] }}"
+          DEPLOYMENT_ID="${{ steps.deploy_trigger.outputs.DEPLOYMENT_ID }}"
+
+          echo "Waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID to reach ACTIVE state..."
+          for i in $(seq 1 45); do
+            STATUS=$(doctl apps get-deployment "$APP_ID" "$DEPLOYMENT_ID" --format Phase --no-header 2>/dev/null || echo "UNKNOWN")
             echo "Attempt $i: $STATUS"
+
             if [ "$STATUS" = "ACTIVE" ]; then
               echo "${{ matrix.service }} is live"
               exit 0
             fi
+
+            if [ "$STATUS" = "ERROR" ] || [ "$STATUS" = "CANCELED" ] || [ "$STATUS" = "SUPERSEDED" ]; then
+              echo "${{ matrix.service }} deployment failed with status: $STATUS"
+              exit 1
+            fi
+
             sleep 10
           done
-          echo "Timed out waiting for ${{ matrix.service }}"
+
+          echo "Timed out waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID"
           exit 1
 
   # ─────────────────────────────────────────────────────────────────────────
