@@ -261,12 +261,25 @@ jobs:
     steps:
       - name: Health-check all services
         run: |
+          required_vars=(STAGING_AUTH_URL STAGING_UPLOAD_URL STAGING_MESSAGING_URL STAGING_SOCKET_URL)
+          for var_name in "${required_vars[@]}"; do
+            if [ -z "${!var_name}" ]; then
+              echo "Missing required secret/env: $var_name"
+              exit 1
+            fi
+          done
+
+          normalize_url() {
+            echo "${1%/}"
+          }
+
           services=(
-            "${STAGING_AUTH_URL}/health"
-            "${STAGING_UPLOAD_URL}/health"
-            "${STAGING_MESSAGING_URL}/health"
-            "${STAGING_SOCKET_URL}/health"
+            "$(normalize_url "${STAGING_AUTH_URL}")/health"
+            "$(normalize_url "${STAGING_UPLOAD_URL}")/health"
+            "$(normalize_url "${STAGING_MESSAGING_URL}")/health"
+            "$(normalize_url "${STAGING_SOCKET_URL}")/health"
           )
+
           for url in "${services[@]}"; do
             echo "Checking $url"
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$url")
