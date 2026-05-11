@@ -72,7 +72,7 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 
 /** Counterpart workspaces for global search (people + public channels) when discovery is allowed. */
-async function getDiscoverySearchWorkspaceIds(
+export async function getDiscoverySearchWorkspaceIds(
   userMemberWorkspaceIds: string[]
 ): Promise<string[]> {
   if (userMemberWorkspaceIds.length === 0) return [];
@@ -236,6 +236,8 @@ export async function performSearch(
       type: true,
       image: true,
       workspaceId: true,
+      collaborationId: true,
+      groupId: true,
       _count: { select: { members: true } },
     },
   });
@@ -307,7 +309,7 @@ export async function performSearch(
 
   const [messagesRes, channelsRes, usersRes, filesRes] = await Promise.all([
     searchMessages(messageWhere, searchTerm, limit, offset),
-    searchChannels(searchWorkspaceIds, searchTerm, joinedChannelIds, allChannelsInWorkspaces),
+    searchChannels(workspaceIds, searchTerm, joinedChannelIds, allChannelsInWorkspaces),
     searchUsers(searchWorkspaceIds, searchTerm, userId, workspaceIds),
     searchFiles(messageWhere, searchTerm, limit),
   ]);
@@ -403,7 +405,7 @@ async function searchMessages(
 }
 
 async function searchChannels(
-  _workspaceIds: string[],
+  viewerMemberWorkspaceIds: string[],
   searchTerm: string | null,
   joinedChannelIds: Set<string>,
   allChannels: Array<{
@@ -412,14 +414,21 @@ async function searchChannels(
     type: string;
     image: string | null;
     workspaceId: string;
+    collaborationId: string | null;
+    groupId: string | null;
     _count: { members: number };
   }>
 ): Promise<{ channels: SearchResults['channels']; total: number }> {
   const term = searchTerm?.replace(/%/g, '') ?? '';
-  // Only show: (1) channels user is in, or (2) public channels user can join
-  let filtered = allChannels.filter(
-    (c) => joinedChannelIds.has(c.id) || c.type === 'PUBLIC'
-  );
+  const memberWorkspaceSet = new Set(viewerMemberWorkspaceIds);
+  // (1) joined channels, (2) public channels in workspaces the user belongs to, or (3) public
+  // *shared* channels in discovery-only partner/org workspaces (exclude local #General, etc.).
+  let filtered = allChannels.filter((c) => {
+    if (joinedChannelIds.has(c.id)) return true;
+    if (c.type !== 'PUBLIC') return false;
+    if (memberWorkspaceSet.has(c.workspaceId)) return true;
+    return c.collaborationId != null || c.groupId != null;
+  });
   if (term) {
     filtered = filtered.filter((c) => c.name.toLowerCase().includes(term.toLowerCase()));
   }

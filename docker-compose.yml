@@ -1,7 +1,11 @@
-version: '3.8'
+# Use hosted DB / Redis: set DATABASE_URL and REDIS_URL in each service .env below.
+# Optional local infra (only when you need Postgres or Redis inside Docker):
+#   docker compose --profile local-db --profile local-redis up --build
 
 services:
   postgres:
+    profiles:
+      - local-db
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: jibbr
@@ -12,12 +16,15 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U jibbr']
+      # Without -d, pg_isready targets a DB named like the user ("jibbr"), which we do not create
+      test: ['CMD-SHELL', 'pg_isready -U jibbr -d jibbr_db']
       interval: 5s
       timeout: 5s
       retries: 10
 
   redis:
+    profiles:
+      - local-redis
     image: redis:7-alpine
     ports:
       - '6379:6379'
@@ -35,11 +42,6 @@ services:
       - '3001:3001'
     env_file:
       - services/auth-service/.env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
   upload-service:
     build:
@@ -49,9 +51,6 @@ services:
       - '3002:3002'
     env_file:
       - services/upload-service/.env
-    depends_on:
-      redis:
-        condition: service_healthy
 
   messaging-service:
     build:
@@ -61,11 +60,6 @@ services:
       - '3003:3003'
     env_file:
       - services/messaging-service/.env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
   socket-service:
     build:
@@ -75,11 +69,6 @@ services:
       - '3004:3004'
     env_file:
       - services/socket-service/.env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
 volumes:
   postgres_data:

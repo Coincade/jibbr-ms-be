@@ -9,6 +9,7 @@ import { ZodError } from "zod";
 import { publishWorkspaceEvent } from "../services/streams-publisher.service.js";
 import { canAccessWorkspaceResource } from "../helpers/collaborationAccess.js";
 import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
+import { getDiscoverySearchWorkspaceIds } from "../services/search.service.js";
 
 const toWorkspaceSlug = (name: string): string => {
   const normalized = name
@@ -865,7 +866,8 @@ export const getPublicChannels = async (req: Request, res: Response) => {
       return res.status(422).json({ message: "Workspace not found" });
     }
 
-    // Check if user is a member of this workspace
+    // Check if user is a member of this workspace, or may list public channels via
+    // federation / network discovery (same policy as global search).
     const member = await prisma.member.findFirst({
       where: {
         userId: user.id,
@@ -875,16 +877,30 @@ export const getPublicChannels = async (req: Request, res: Response) => {
     });
 
     if (!member) {
-      return res.status(403).json({ message: "You don't have access to this workspace" });
+      const myMemberships = await prisma.member.findMany({
+        where: { userId: user.id, isActive: true },
+        select: { workspaceId: true },
+      });
+      const myWorkspaceIds = myMemberships.map((m) => m.workspaceId);
+      const discoveryWorkspaceIds = await getDiscoverySearchWorkspaceIds(myWorkspaceIds);
+      if (!discoveryWorkspaceIds.includes(workspaceId)) {
+        return res.status(403).json({ message: "You don't have access to this workspace" });
+      }
     }
 
-    // Get all public channels in the workspace (exclude bridge channels)
+    // Members: all public channels. Discovery-only viewers: public channels that are part of
+    // federation (shared) — never list workspace-local defaults (e.g. General) for partner/org peers.
     const publicChannels = await prisma.channel.findMany({
       where: {
         workspaceId: workspaceId,
         type: "PUBLIC",
         deletedAt: null,
         isBridgeChannel: false,
+        ...(member
+          ? {}
+          : {
+              OR: [{ collaborationId: { not: null } }, { groupId: { not: null } }],
+            }),
       },
       select: {
         id: true,

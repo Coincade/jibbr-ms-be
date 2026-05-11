@@ -35,6 +35,8 @@ COPY --from=builder /app/node_modules                      ./node_modules
 COPY --from=builder /app/packages                          ./packages
 COPY --from=builder /app/services/socket-service/dist      ./services/socket-service/dist
 COPY --from=builder /app/services/socket-service/package.json ./services/socket-service/
+# npm workspaces can nest deps (e.g. ws) under the service; root node_modules alone is not enough
+COPY --from=builder /app/services/socket-service/node_modules ./services/socket-service/node_modules
 
 EXPOSE 3004
 

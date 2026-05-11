@@ -55,7 +55,16 @@ describe('search.service', () => {
       .mockResolvedValueOnce([]); // searchUsers member query
     prismaMock.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
     prismaMock.channel.findMany.mockResolvedValue([
-      { id: 'c1', name: 'general', type: 'PUBLIC', image: null, workspaceId: 'w1', _count: { members: 3 } },
+      {
+        id: 'c1',
+        name: 'general',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w1',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 3 },
+      },
     ]);
     prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
     prismaMock.message.findMany
@@ -78,7 +87,16 @@ describe('search.service', () => {
       .mockResolvedValueOnce([]);
     prismaMock.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
     prismaMock.channel.findMany.mockResolvedValue([
-      { id: 'c1', name: 'general', type: 'PUBLIC', image: null, workspaceId: 'w1', _count: { members: 3 } },
+      {
+        id: 'c1',
+        name: 'general',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w1',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 3 },
+      },
     ]);
     prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
     prismaMock.message.findMany
@@ -133,10 +151,46 @@ describe('search.service', () => {
       ]);
     prismaMock.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
     prismaMock.channel.findMany.mockResolvedValue([
-      { id: 'c1', name: 'general', type: 'PUBLIC', image: null, workspaceId: 'w1', _count: { members: 3 } },
-      { id: 'c2', name: 'random', type: 'PUBLIC', image: null, workspaceId: 'w1', _count: { members: 2 } },
-      { id: 'c3', name: 'eng', type: 'PUBLIC', image: null, workspaceId: 'w1', _count: { members: 4 } },
-      { id: 'c4', name: 'ops', type: 'PUBLIC', image: null, workspaceId: 'w1', _count: { members: 5 } },
+      {
+        id: 'c1',
+        name: 'general',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w1',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 3 },
+      },
+      {
+        id: 'c2',
+        name: 'random',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w1',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 2 },
+      },
+      {
+        id: 'c3',
+        name: 'eng',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w1',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 4 },
+      },
+      {
+        id: 'c4',
+        name: 'ops',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w1',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 5 },
+      },
     ]);
     prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
     prismaMock.message.findMany
@@ -192,7 +246,16 @@ describe('search.service', () => {
       .mockResolvedValueOnce([]);
     prismaMock.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
     prismaMock.channel.findMany.mockResolvedValue([
-      { id: 'c1', name: 'general', type: 'PUBLIC', image: null, workspaceId: 'w1', _count: { members: 3 } },
+      {
+        id: 'c1',
+        name: 'general',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w1',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 3 },
+      },
     ]);
     prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
     prismaMock.message.findMany.mockResolvedValue([]);
@@ -209,5 +272,60 @@ describe('search.service', () => {
     expect(where.userId).toBe('u2');
     expect(where.channelId).toBe('c1');
     expect(where.createdAt).toEqual({ lt: new Date('2026-01-05T00:00:00.000Z') });
+  });
+
+  it('excludes workspace-local public channels in discovery-only partner workspaces', async () => {
+    prismaMock.member.findMany
+      .mockResolvedValueOnce([{ workspaceId: 'w_coincade' }])
+      .mockResolvedValueOnce([]);
+    prismaMock.workspaceCollaboration.findMany.mockResolvedValue([
+      {
+        workspaceAId: 'w_coincade',
+        workspaceBId: 'w_elventive',
+        policy: { allowExternalDiscovery: true },
+      },
+    ]);
+    prismaMock.channelMember.findMany.mockResolvedValue([]);
+    prismaMock.channel.findMany.mockResolvedValue([
+      {
+        id: 'c_own_general',
+        name: 'General',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w_coincade',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 4 },
+      },
+      {
+        id: 'c_partner_local_general',
+        name: 'General',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w_elventive',
+        collaborationId: null,
+        groupId: null,
+        _count: { members: 1 },
+      },
+      {
+        id: 'c_partner_shared',
+        name: 'collab3',
+        type: 'PUBLIC',
+        image: null,
+        workspaceId: 'w_elventive',
+        collaborationId: 'collab-row-1',
+        groupId: null,
+        _count: { members: 2 },
+      },
+    ]);
+    prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
+    prismaMock.message.findMany.mockResolvedValue([]);
+    prismaMock.attachment.findMany.mockResolvedValue([]);
+
+    const result = await performSearch('u1', { q: '', limit: 20 });
+    const channelIds = result.channels.map((c) => c.id);
+    expect(channelIds).toContain('c_own_general');
+    expect(channelIds).toContain('c_partner_shared');
+    expect(channelIds).not.toContain('c_partner_local_general');
   });
 });
