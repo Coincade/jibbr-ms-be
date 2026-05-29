@@ -1,15 +1,7 @@
 import { createClient } from 'redis';
 
-// Build Redis URL from Aiven Valkey environment variables
+// Build Redis URL from environment variables
 const buildRedisUrl = (): string => {
-  // Debug: Log what env vars are available when this function is called
-  console.log('🔍 buildRedisUrl() called with env:', {
-    REDIS_URL: process.env.REDIS_URL ? 'SET' : 'NOT SET',
-    REDIS_HOST: process.env.REDIS_HOST || 'NOT SET',
-    REDIS_PORT: process.env.REDIS_PORT || 'NOT SET',
-    REDIS_PASSWORD: process.env.REDIS_PASSWORD ? 'SET' : 'NOT SET',
-  });
-
   // Support both REDIS_URL format and separate host/port/password
   if (process.env.REDIS_URL) {
     console.log('🔗 Using REDIS_URL for WebSocket Redis connection');
@@ -24,7 +16,7 @@ const buildRedisUrl = (): string => {
     host,
     port,
     hasPassword: !!password,
-    source: 'Aiven Valkey'
+    source: 'Environment'
   });
 
   // Build URL with or without password

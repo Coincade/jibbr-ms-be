@@ -1,6 +1,6 @@
 import { createClient } from 'redis';
 
-// Build Redis URL from Aiven Valkey environment variables
+// Build Redis URL from environment variables
 const buildRedisUrl = (): string => {
   // Support both REDIS_URL format and separate host/port/password
   if (process.env.REDIS_URL) {
@@ -16,7 +16,7 @@ const buildRedisUrl = (): string => {
     host,
     port,
     hasPassword: !!password,
-    source: 'Aiven Valkey'
+    source: 'Environment'
   });
 
   // Build URL with or without password

@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const envPath = path.join(__dirname, '../.env');
 
-dotenv.config({ path: envPath });
+dotenv.config({ path: envPath, override: true });
 
 const app = createUploadApp();
 const logger = new Logger('upload-service');

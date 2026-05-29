@@ -12,17 +12,11 @@ const __dirname = dirname(__filename);
 const envPath = path.join(__dirname, '../.env');
 
 console.log('📁 Loading .env from:', envPath);
-const result = dotenv.config({ path: envPath });
+const result = dotenv.config({ path: envPath, override: true });
 if (result.error) {
   console.error('❌ Failed to load .env:', result.error);
 } else {
   console.log('✅ .env loaded successfully');
-  console.log('🔍 Redis env check:', {
-    REDIS_URL: process.env.REDIS_URL ? 'SET' : 'NOT SET',
-    REDIS_HOST: process.env.REDIS_HOST || 'NOT SET',
-    REDIS_PORT: process.env.REDIS_PORT || 'NOT SET',
-    REDIS_PASSWORD: process.env.REDIS_PASSWORD ? 'SET' : 'NOT SET',
-  });
 }
 
 const app = createSocketApp();

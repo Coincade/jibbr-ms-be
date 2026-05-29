@@ -1,6 +1,6 @@
 import { ConnectionOptions, DefaultJobOptions } from "bullmq";
 
-// Support both REDIS_URL and separate host/port/password for Aiven Valkey
+// Support both REDIS_URL and separate host/port/password
 const getRedisConfig = () => {
   if (process.env.REDIS_URL) {
     console.log('🔗 Using REDIS_URL for BullMQ connection');
@@ -15,7 +15,7 @@ const getRedisConfig = () => {
     host,
     port,
     hasPassword: !!password,
-    source: 'Aiven Valkey'
+    source: 'Environment'
   });
   
   return { host, port, password };
