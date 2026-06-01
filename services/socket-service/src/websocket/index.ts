@@ -347,7 +347,12 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('channel_call_producer_ready', async (data) => {
     const { channelId, producerId, kind, sessionId } = data || {};
     if (!channelId || !producerId) return;
-    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) {
+      const isMember = await validateChannelMembership(user.id, channelId);
+      if (!isMember) return;
+      (socket.data as any).allowedChannels?.add(channelId);
+      addClientToChannel(socket, channelId, channelClients);
+    }
     socket.to(channelId).emit('channel_call_new_producer', {
       channelId,
       sessionId,
@@ -437,7 +442,12 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('conversation_call_producer_ready', async (data) => {
     const { conversationId, producerId, kind, sessionId } = data || {};
     if (!conversationId || !producerId) return;
-    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) {
+      const allowed = await validateConversationParticipation(user.id, conversationId);
+      if (!allowed) return;
+      (socket.data as any).allowedConversations?.add(conversationId);
+      addClientToConversation(socket, conversationId, conversationClients);
+    }
     socket.to(conversationId).emit('conversation_call_new_producer', {
       conversationId,
       sessionId,

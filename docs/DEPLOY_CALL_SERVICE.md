@@ -1,114 +1,203 @@
-# Deploying call-service (mediasoup)
+# Call-service deployment notes (mediasoup on DigitalOcean Droplet)
 
-## Requirements
+Use this as a runbook for staging/production. Build the image on your Mac; run it on a Droplet with **host networking** (required for UDP).
 
-- **HTTP** port (default `3005`) for REST signaling
-- **UDP** ports `40000–49999` (or your `MEDIASOUP_RTC_*` range) for WebRTC media
-- Same `JWT_SECRET` as auth/socket/messaging services
-- `DATABASE_URL` (membership checks + `HuddleSession` history)
+---
 
-## Environment variables
+## Architecture (quick reference)
 
-See `services/call-service/.env.example`.
+| Piece | Where | Port / protocol |
+|-------|--------|-----------------|
+| call-service REST | Droplet | TCP **3005** |
+| WebRTC media (mediasoup) | Droplet | UDP **40000–49999** |
+| Huddle signaling | App Platform socket-service | HTTPS (not on Droplet) |
+| Auth / messaging | App Platform | HTTPS |
+| Image registry | Docker Hub | `atharvad24/jibbr-call-service:webrtc-ms` |
 
-| Variable | Description |
-|----------|-------------|
-| `MEDIASOUP_ANNOUNCED_IP` | Public IP or hostname clients use to send media |
-| `MEDIASOUP_LISTEN_IP` | Bind address (`0.0.0.0` in production) |
-| `MEDIASOUP_RTC_MIN_PORT` / `MAX` | UDP port range (open in firewall) |
-| `MEDIASOUP_NUM_WORKERS` | CPU cores for mediasoup workers |
-| `TURN_*` | ExpressTURN or coturn for strict NAT |
-| `ALLOWED_ORIGINS` | Electron/web origins (CORS) |
+**Do not** use App Platform for call-service (UDP/WebRTC).
 
-## Database migration
+---
 
-After pulling, run from `packages/database`:
+## One-time setup
+
+### DigitalOcean Droplet
+
+- [ ] Ubuntu 22.04+ (1 GB+ RAM recommended)
+- [ ] SSH key added in DO account
+- [ ] Note **public IPv4** → used as `MEDIASOUP_ANNOUNCED_IP`
+- [ ] Hostname example: `webrtc`
+
+### Firewall (DO control panel)
+
+- [ ] Inbound **TCP** `3005`
+- [ ] Inbound **UDP** `40000–49999`
+- [ ] Inbound **TCP** `22` (SSH, restrict by IP if possible)
+
+### Droplet software (first time only)
 
 ```bash
-npx prisma migrate dev --name huddle_sessions
+ssh root@<DROPLET_PUBLIC_IP>
+
+apt-get update && apt-get install -y docker.io docker-compose-v2 git
+systemctl enable docker && systemctl start docker
+
+mkdir -p /opt/jibbr-ms-be && cd /opt/jibbr-ms-be
+git clone -b webrtc-ms https://github.com/Coincade/jibbr-ms-be.git .
 ```
 
-## Droplet + Docker Hub (recommended for small Droplets)
+### Server env file
 
-Build on your Mac (more RAM), run on the Droplet (no `docker compose build` on the server).
+Edit `services/call-service/.env` (see `.env.example`):
 
-### 1. On your Mac
+- [ ] `NODE_ENV=production`
+- [ ] `JWT_SECRET` — **same** as auth, socket, messaging
+- [ ] `DATABASE_URL` — Neon Postgres
+- [ ] `MEDIASOUP_LISTEN_IP=0.0.0.0`
+- [ ] `MEDIASOUP_ANNOUNCED_IP=<DROPLET_PUBLIC_IPV4>` (not private IP)
+- [ ] `MEDIASOUP_RTC_MIN_PORT=40000` / `MAX=49999`
+- [ ] `ALLOWED_ORIGINS` — staging/prod DO app URLs + `http://localhost:5173`
+- [ ] Optional: `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` (no quotes on credential)
+
+### Database (Neon)
+
+- [ ] Migration applied (`HuddleSession` table exists)
+
+```bash
+cd packages/database && npx prisma migrate deploy
+```
+
+### Docker Hub
+
+- [ ] Account / namespace: `atharvad24` (or set `DOCKERHUB_NAMESPACE`)
+
+---
+
+## Deploy / update image (Mac)
+
+**When to rebuild & push:** call-service code, Dockerfile, or `package-lock.json` changes.
+
+**When git push only is enough:** `docker-compose.call-image.yml` or docs (no new image).
 
 ```bash
 cd jibbr-ms-be
+
 docker login
-chmod +x scripts/publish-call-image.sh
-export DOCKERHUB_NAMESPACE=atharvad24   # your Docker Hub username
-./scripts/publish-call-image.sh           # tags: atharvad24/jibbr-call-service:webrtc-ms
+export DOCKERHUB_NAMESPACE=atharvad24
+./scripts/publish-call-image.sh
+# optional custom tag: ./scripts/publish-call-image.sh v1.0.0
 ```
 
-Or manually:
+- Builds `linux/amd64` for DigitalOcean (Apple Silicon Mac).
+- Image: **Debian bookworm-slim** (glibc). Mediasoup worker installed in Dockerfile (no Alpine — worker exits with code 127 on Alpine).
+- No `apt-get` in Dockerfile (avoids Debian HTTP 403 in Docker builds).
+
+Commit & push code when needed:
 
 ```bash
-docker build --platform linux/amd64 -f services/call-service/Dockerfile \
-  -t atharvad24/jibbr-call-service:webrtc-ms .
-docker push atharvad24/jibbr-call-service:webrtc-ms
+git add -A && git commit -m "..." && git push origin webrtc-ms
 ```
 
-Use `--platform linux/amd64` so the image runs on DigitalOcean (not arm64 from Apple Silicon).
+---
 
-The image uses **Debian bookworm-slim** (glibc). Mediasoup’s `npm postinstall` is skipped (`--ignore-scripts`); the official **linux-x64** worker binary is downloaded in the Dockerfile.
-
-### 2. On the Droplet
-
-Clone the repo (for `.env` only) or copy `services/call-service/.env` to the server.
+## Deploy / update on Droplet
 
 ```bash
+ssh root@<DROPLET_PUBLIC_IP>
 cd /opt/jibbr-ms-be
-nano services/call-service/.env   # NODE_ENV=production, MEDIASOUP_ANNOUNCED_IP=<public IPv4>
 
-docker login
+git pull origin webrtc-ms          # compose file + docs
+docker login                       # first time or expired
 docker pull atharvad24/jibbr-call-service:webrtc-ms
 
 export CALL_IMAGE=atharvad24/jibbr-call-service:webrtc-ms
-docker compose -f docker-compose.call-image.yml up -d
-docker compose -f docker-compose.call-image.yml logs -f call-service
+docker compose -f docker-compose.call-image.yml up -d --force-recreate
+
+docker compose -f docker-compose.call-image.yml logs --tail=30 call-service
 curl -s http://localhost:3005/health
 ```
 
-`docker-compose.call-image.yml` uses **`network_mode: host`** so mediasoup can use UDP 40000–49999 without Docker mapping 10k ports (that pattern times out with `userland proxy` errors).
+**Success signals in logs:**
 
-Open firewall: **TCP 3005**, **UDP 40000–49999**.
+- `[mediasoup] 1 worker(s) started`
+- `Call service running on port 3005`
 
-### 3. Updates
-
-After code changes: run `./scripts/publish-call-image.sh` on Mac again, then on the Droplet:
+**Health (on droplet or Mac):**
 
 ```bash
-docker pull atharvad24/jibbr-call-service:webrtc-ms
-docker compose -f docker-compose.call-image.yml up -d --force-recreate
+curl -s http://<DROPLET_PUBLIC_IP>:3005/health
+# expect: "status":"healthy", "mediasoupWorkers":1
 ```
 
-## DigitalOcean App Platform
+During an active huddle, `activeRooms` should be > 0.
 
-App Platform is **not** suitable for mediasoup UDP. Use a Droplet for call-service; keep auth/messaging/socket on App Platform.
+---
 
-1. Create an app from `services/call-service/Dockerfile` (or monorepo docker-compose service).
-2. Add **HTTP** route to port 3005.
-3. Configure **UDP** passthrough for ports 40000–49999 on the droplet/load balancer (App Platform UDP support varies; a Droplet + Docker is often simpler for mediasoup).
-4. Set env vars above; use the Droplet’s **public IPv4** for `MEDIASOUP_ANNOUNCED_IP`.
-
-## Electron / web clients
+## Electron client (staging)
 
 In `jibbr-electron-fe/.env`:
 
 ```env
-VITE_CALL_API_URL=https://your-call-service.example.com
+VITE_API_URL=https://jibbr-dev-messaging-jgk48.ondigitalocean.app
+VITE_AUTH_API_URL=https://jibbr-dev-auth-6ib5s.ondigitalocean.app
+VITE_UPLOAD_API_URL=https://jibbr-dev-upload-6yets.ondigitalocean.app
+VITE_SOCKET_URL=https://jibbr-dev-socket-emtnf.ondigitalocean.app
+VITE_CALL_API_URL=http://<DROPLET_PUBLIC_IP>:3005
 ```
 
-Update CSP in `electron.vite.config.ts` and `src/main/index.ts` (already reads `VITE_CALL_API_URL`).
+Restart Electron after changing `.env`.
 
-## Health check
+---
 
-`GET /health` returns `{ status, activeRooms, mediasoupWorkers, uptime }`.
+## Important gotchas (learned from production)
 
-## TURN (production)
+| Issue | Cause | Fix |
+|-------|--------|-----|
+| `userland proxy` timeout on `up` | Mapping UDP 40000–49999 in compose | Use `network_mode: host` in `docker-compose.call-image.yml` |
+| mediasoup `code:127` | Alpine + glibc worker | Use **bookworm-slim** image (current Dockerfile) |
+| `apt-get` 403 during build | Debian HTTP mirrors in Docker | Current Dockerfile uses Node `fetch` — no apt |
+| Health empty / crash loop | Wrong image or worker failed | `docker pull` latest; check logs |
+| No audio, health OK | Wrong announced IP or UDP blocked | `MEDIASOUP_ANNOUNCED_IP` = public IPv4; open UDP range |
+| 401 on call API | JWT mismatch | Align `JWT_SECRET` with auth service |
+| Huddle UI stuck | Socket down / wrong URL | `VITE_SOCKET_URL` → dev socket app |
 
-Use ExpressTURN or self-hosted coturn. Do not wrap `TURN_CREDENTIAL` in quotes in `.env`.
+**Do not** map `40000-49999:40000-49999/udp` in compose.
 
-For scale, use ExpressTURN **premium shared-secret** to mint short-lived credentials per session (see ExpressTURN docs).
+**Do not** use Alpine for the runtime image with mediasoup prebuilt workers.
+
+---
+
+## Rollback
+
+```bash
+docker pull atharvad24/jibbr-call-service:<previous-tag>
+export CALL_IMAGE=atharvad24/jibbr-call-service:<previous-tag>
+docker compose -f docker-compose.call-image.yml up -d --force-recreate
+```
+
+---
+
+## Files reference
+
+| File | Purpose |
+|------|---------|
+| `services/call-service/Dockerfile` | Image build |
+| `scripts/publish-call-image.sh` | Mac: build + push |
+| `docker-compose.call-image.yml` | Droplet: run image (`network_mode: host`) |
+| `services/call-service/.env` | Server secrets (not in image) |
+| `services/call-service/.env.example` | Template |
+
+---
+
+## Optional later
+
+- HTTPS reverse proxy (Caddy/nginx) for call REST
+- Fix Prisma OpenSSL warning in Dockerfile (cosmetic if health is OK)
+- `kernel5` mediasoup worker tarball only if droplet kernel is 5.x (`uname -r`)
+- GitHub Actions on `ubuntu-latest` to build/push instead of Mac
+
+---
+
+## Health & TURN
+
+- `GET /health` → `{ status, activeRooms, mediasoupWorkers, uptime }`
+- TURN: ExpressTURN or coturn; no quotes around `TURN_CREDENTIAL`
