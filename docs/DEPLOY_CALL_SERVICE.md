@@ -52,7 +52,7 @@ docker push atharvad24/jibbr-call-service:webrtc-ms
 
 Use `--platform linux/amd64` so the image runs on DigitalOcean (not arm64 from Apple Silicon).
 
-The image uses **Alpine** with **`libc6-compat`** so mediasoup can use its prebuilt glibc worker (no Python/Debian in the Dockerfile).
+The image uses **Alpine** with **`libc6-compat`**. Mediasoup’s `npm postinstall` is skipped (`--ignore-scripts`); the official **linux-x64** worker binary is downloaded in the Dockerfile (no Python/Debian).
 
 ### 2. On the Droplet
 

@@ -1,7 +1,11 @@
-# Alpine + libc6-compat: run mediasoup's glibc prebuilt worker on musl without Python/Debian.
+# Alpine: skip mediasoup postinstall (it cannot validate glibc prebuilts on musl during npm ci).
+# Install the official linux-x64 worker binary manually; libc6-compat runs it at runtime.
 FROM node:22-alpine AS builder
 
-RUN apk add --no-cache openssl libc6-compat
+ARG MEDIASOUP_VERSION=3.20.0
+ARG MEDIASOUP_WORKER_TAR=mediasoup-worker-${MEDIASOUP_VERSION}-linux-x64-kernel6.tgz
+
+RUN apk add --no-cache openssl libc6-compat curl
 
 WORKDIR /app
 
@@ -13,8 +17,14 @@ COPY packages/logger/package*.json             packages/logger/
 COPY packages/shared-types/package*.json       packages/shared-types/
 COPY services/call-service/package*.json       services/call-service/
 
-ENV MEDIASOUP_FORCE_WORKER_PREBUILT_DOWNLOAD=1
-RUN npm ci --workspace=call-service --include-workspace-root
+RUN npm ci --workspace=call-service --include-workspace-root --ignore-scripts
+
+RUN mkdir -p node_modules/mediasoup/worker/out/Release \
+  && curl -fsSL -o /tmp/mediasoup-worker.tgz \
+    "https://github.com/versatica/mediasoup/releases/download/${MEDIASOUP_VERSION}/${MEDIASOUP_WORKER_TAR}" \
+  && tar -xzf /tmp/mediasoup-worker.tgz -C node_modules/mediasoup/worker/out/Release \
+  && chmod +x node_modules/mediasoup/worker/out/Release/mediasoup-worker \
+  && rm /tmp/mediasoup-worker.tgz
 
 COPY packages/ packages/
 COPY services/call-service/ services/call-service/
@@ -31,9 +41,8 @@ WORKDIR /app
 
 COPY --from=builder /app/node_modules                      ./node_modules
 COPY --from=builder /app/packages                          ./packages
-COPY --from=builder /app/services/call-service/dist        ./services/call-service/dist
+COPY --from=builder /app/services/call-service/dist         ./services/call-service/dist
 COPY --from=builder /app/services/call-service/package.json ./services/call-service/
-COPY --from=builder /app/services/call-service/node_modules ./services/call-service/node_modules
 
 EXPOSE 3005
 EXPOSE 40000-49999/udp
