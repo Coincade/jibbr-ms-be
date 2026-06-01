@@ -70,5 +70,15 @@ services:
     env_file:
       - services/socket-service/.env
 
+  call-service:
+    build:
+      context: .
+      dockerfile: services/call-service/Dockerfile
+    ports:
+      - '3005:3005'
+      - '40000-49999:40000-49999/udp'
+    env_file:
+      - services/call-service/.env
+
 volumes:
   postgres_data:

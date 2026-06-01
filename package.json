@@ -16,6 +16,7 @@
     "dev:upload": "turbo run dev --filter=upload-service",
     "dev:messaging": "turbo run dev --filter=messaging-service",
     "dev:socket": "turbo run dev --filter=socket-service",
+    "dev:call": "turbo run dev --filter=call-service",
     "dev:all": "turbo run dev --filter='./services/*'",
     "start": "turbo run start",
     "test": "turbo run test",

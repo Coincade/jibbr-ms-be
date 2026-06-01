@@ -1,0 +1,42 @@
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import dotenv from 'dotenv';
+import path from 'path';
+import { Logger } from '@jibbr/logger';
+import { createCallApp } from './app.js';
+import { initMediasoupWorkers, closeMediasoupWorkers } from './mediasoup/workers.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const envPath = path.join(__dirname, '../.env');
+
+dotenv.config({ path: envPath, override: true });
+
+const logger = new Logger('call-service');
+const PORT = process.env.PORT || process.env.CALL_PORT || 3005;
+
+const start = async () => {
+  try {
+    await initMediasoupWorkers();
+    const app = createCallApp();
+
+    const server = app.listen(PORT, () => {
+      logger.info(`Call service running on port ${PORT}`);
+    });
+
+    const shutdown = async () => {
+      logger.info('Shutting down call service...');
+      server.close();
+      await closeMediasoupWorkers();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  } catch (error) {
+    logger.error('Failed to start call service', error as Error);
+    process.exit(1);
+  }
+};
+
+start();
