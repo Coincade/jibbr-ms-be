@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 RUN apk add --no-cache openssl python3 make g++
 
@@ -20,7 +20,7 @@ COPY services/call-service/ services/call-service/
 RUN npx turbo run db:generate --filter=call-service
 RUN npx turbo run build --filter=call-service
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 RUN apk add --no-cache openssl
 
