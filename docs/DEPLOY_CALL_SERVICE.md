@@ -71,6 +71,8 @@ docker compose -f docker-compose.call-image.yml logs -f call-service
 curl -s http://localhost:3005/health
 ```
 
+`docker-compose.call-image.yml` uses **`network_mode: host`** so mediasoup can use UDP 40000–49999 without Docker mapping 10k ports (that pattern times out with `userland proxy` errors).
+
 Open firewall: **TCP 3005**, **UDP 40000–49999**.
 
 ### 3. Updates
