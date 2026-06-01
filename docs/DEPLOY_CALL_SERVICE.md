@@ -28,7 +28,61 @@ After pulling, run from `packages/database`:
 npx prisma migrate dev --name huddle_sessions
 ```
 
+## Droplet + Docker Hub (recommended for small Droplets)
+
+Build on your Mac (more RAM), run on the Droplet (no `docker compose build` on the server).
+
+### 1. On your Mac
+
+```bash
+cd jibbr-ms-be
+docker login
+chmod +x scripts/publish-call-image.sh
+export DOCKERHUB_NAMESPACE=atharvad24   # your Docker Hub username
+./scripts/publish-call-image.sh           # tags: atharvad24/jibbr-call-service:webrtc-ms
+```
+
+Or manually:
+
+```bash
+docker build --platform linux/amd64 -f services/call-service/Dockerfile \
+  -t atharvad24/jibbr-call-service:webrtc-ms .
+docker push atharvad24/jibbr-call-service:webrtc-ms
+```
+
+Use `--platform linux/amd64` so the image runs on DigitalOcean (not arm64 from Apple Silicon).
+
+### 2. On the Droplet
+
+Clone the repo (for `.env` only) or copy `services/call-service/.env` to the server.
+
+```bash
+cd /opt/jibbr-ms-be
+nano services/call-service/.env   # NODE_ENV=production, MEDIASOUP_ANNOUNCED_IP=<public IPv4>
+
+docker login
+docker pull atharvad24/jibbr-call-service:webrtc-ms
+
+export CALL_IMAGE=atharvad24/jibbr-call-service:webrtc-ms
+docker compose -f docker-compose.call-image.yml up -d
+docker compose -f docker-compose.call-image.yml logs -f call-service
+curl -s http://localhost:3005/health
+```
+
+Open firewall: **TCP 3005**, **UDP 40000–49999**.
+
+### 3. Updates
+
+After code changes: run `./scripts/publish-call-image.sh` on Mac again, then on the Droplet:
+
+```bash
+docker pull atharvad24/jibbr-call-service:webrtc-ms
+docker compose -f docker-compose.call-image.yml up -d --force-recreate
+```
+
 ## DigitalOcean App Platform
+
+App Platform is **not** suitable for mediasoup UDP. Use a Droplet for call-service; keep auth/messaging/socket on App Platform.
 
 1. Create an app from `services/call-service/Dockerfile` (or monorepo docker-compose service).
 2. Add **HTTP** route to port 3005.

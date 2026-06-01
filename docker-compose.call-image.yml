@@ -1,0 +1,18 @@
+# Run a pre-built call-service image from Docker Hub (no build on the Droplet).
+#
+# On the Droplet (after pull):
+#   export CALL_IMAGE=atharvad24/jibbr-call-service:webrtc-ms
+#   docker compose -f docker-compose.call-image.yml up -d
+#
+# Requires services/call-service/.env on the server.
+
+services:
+  call-service:
+    image: ${CALL_IMAGE:-atharvad24/jibbr-call-service:webrtc-ms}
+    container_name: jibbr-call-service
+    restart: unless-stopped
+    env_file:
+      - services/call-service/.env
+    ports:
+      - '3005:3005'
+      - '40000-49999:40000-49999/udp'
