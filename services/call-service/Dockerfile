@@ -12,7 +12,8 @@ COPY packages/logger/package*.json             packages/logger/
 COPY packages/shared-types/package*.json       packages/shared-types/
 COPY services/call-service/package*.json       services/call-service/
 
-RUN npm ci
+# Install only call-service workspace (faster, less RAM than full monorepo npm ci)
+RUN npm ci --workspace=call-service --include-workspace-root
 
 COPY packages/ packages/
 COPY services/call-service/ services/call-service/
