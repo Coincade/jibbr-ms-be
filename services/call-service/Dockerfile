@@ -1,6 +1,7 @@
+# Alpine + libc6-compat: run mediasoup's glibc prebuilt worker on musl without Python/Debian.
 FROM node:22-alpine AS builder
 
-RUN apk add --no-cache openssl python3 make g++
+RUN apk add --no-cache openssl libc6-compat
 
 WORKDIR /app
 
@@ -12,7 +13,7 @@ COPY packages/logger/package*.json             packages/logger/
 COPY packages/shared-types/package*.json       packages/shared-types/
 COPY services/call-service/package*.json       services/call-service/
 
-# Install only call-service workspace (faster, less RAM than full monorepo npm ci)
+ENV MEDIASOUP_FORCE_WORKER_PREBUILT_DOWNLOAD=1
 RUN npm ci --workspace=call-service --include-workspace-root
 
 COPY packages/ packages/
@@ -23,7 +24,7 @@ RUN npx turbo run build --filter=call-service
 
 FROM node:22-alpine AS runner
 
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl libc6-compat
 
 ENV NODE_ENV=production
 WORKDIR /app

@@ -52,6 +52,8 @@ docker push atharvad24/jibbr-call-service:webrtc-ms
 
 Use `--platform linux/amd64` so the image runs on DigitalOcean (not arm64 from Apple Silicon).
 
+The image uses **Alpine** with **`libc6-compat`** so mediasoup can use its prebuilt glibc worker (no Python/Debian in the Dockerfile).
+
 ### 2. On the Droplet
 
 Clone the repo (for `.env` only) or copy `services/call-service/.env` to the server.
