@@ -5,6 +5,7 @@ import path from 'path';
 import { Logger } from '@jibbr/logger';
 import { createCallApp } from './app.js';
 import { initMediasoupWorkers, closeMediasoupWorkers } from './mediasoup/workers.js';
+import { logIceServerStatus } from './config/mediasoup.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,6 +19,7 @@ const PORT = process.env.PORT || process.env.CALL_PORT || 3005;
 const start = async () => {
   try {
     await initMediasoupWorkers();
+    logIceServerStatus();
     const app = createCallApp();
 
     const server = app.listen(PORT, () => {

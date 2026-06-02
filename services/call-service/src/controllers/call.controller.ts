@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import type { AuthRequest } from '@jibbr/auth-middleware';
 import { z } from 'zod';
-import { getIceServers, getWebRtcTransportOptions } from '../config/mediasoup.js';
+import { getIceServers, getWebRtcTransportOptions, isTurnConfigured } from '../config/mediasoup.js';
 import {
   getOrCreatePeer,
   getOrCreateRoom,
@@ -12,12 +12,22 @@ import {
   getRoomSnapshot,
   forceCloseRoom,
   setPeerMediaState,
+  findProducerInRoom,
 } from '../mediasoup/rooms.js';
+import type { ProducerSource } from '../mediasoup/producer-source.js';
+import { producerSourceFromProducer } from '../mediasoup/producer-source.js';
+import { emitProducerClosed, emitWorkspaceHuddleUpdate } from '../services/call-signal.service.js';
 import { assertRoomMember } from '../services/membership.service.js';
 import {
   startHuddleSessionRecord,
   listRecentHuddles,
+  listChannelHuddleHistory,
 } from '../services/huddle-session.service.js';
+import { listLiveHuddlesForWorkspace } from '../services/huddle-live.service.js';
+import {
+  buildWorkspaceHuddlePayload,
+  resolveWorkspaceIdForRoom,
+} from '../services/huddle-live.service.js';
 import { conversationRoomId } from '../utils/room-id.js';
 
 const roomIdBody = z.object({
@@ -39,6 +49,7 @@ const produceBody = z.object({
   transportId: z.string().min(1),
   kind: z.enum(['audio', 'video']),
   rtpParameters: z.record(z.unknown()),
+  source: z.enum(['camera', 'screen']).optional(),
 });
 
 const consumeBody = z.object({
@@ -76,6 +87,17 @@ const joinRoom = async (req: Request, res: Response, roomId: string): Promise<vo
 
   getOrCreatePeer(room, userId, displayName);
 
+  const snapshotAfterJoin = getRoomSnapshot(roomId);
+  if (snapshotAfterJoin) {
+    const workspaceId = await resolveWorkspaceIdForRoom(roomId);
+    if (workspaceId) {
+      void emitWorkspaceHuddleUpdate(
+        workspaceId,
+        buildWorkspaceHuddlePayload(workspaceId, roomId, snapshotAfterJoin)
+      );
+    }
+  }
+
   const existingProducers = listRemoteProducers(room, userId);
   const participants = listOtherParticipants(room, userId);
 
@@ -86,6 +108,7 @@ const joinRoom = async (req: Request, res: Response, roomId: string): Promise<vo
     hostUserId: room.hostUserId,
     routerRtpCapabilities: room.router.rtpCapabilities,
     iceServers: getIceServers(),
+    turnConfigured: isTurnConfigured(),
     existingProducers,
     participants,
   });
@@ -266,6 +289,35 @@ export const listWorkspaceHuddleHistory = async (req: Request, res: Response): P
   }
 };
 
+export const listWorkspaceHuddlesLive = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { workspaceId } = z.object({ workspaceId: z.string().min(1) }).parse(req.params);
+    const huddles = await listLiveHuddlesForWorkspace(workspaceId, userId);
+    res.json({ huddles });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to list live huddles';
+    const status = message.includes('not a member') ? 403 : 400;
+    res.status(status).json({ error: message });
+  }
+};
+
+export const listChannelHuddlesHistory = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { channelId } = z.object({ channelId: z.string().min(1) }).parse(req.params);
+    await assertRoomMember(userId, channelId);
+    const limit = z.coerce.number().min(1).max(50).optional().parse(req.query.limit ?? 20);
+    const sessions = await listChannelHuddleHistory(channelId, limit);
+    res.json({ sessions });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to list channel huddle history';
+    const status =
+      message.includes('not a member') || message.includes('participant') ? 403 : 400;
+    res.status(status).json({ error: message });
+  }
+};
+
 export const createWebRtcTransport = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = getUserId(req);
@@ -348,7 +400,7 @@ export const connectWebRtcTransport = async (req: Request, res: Response): Promi
 export const produce = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = getUserId(req);
-    const { channelId, transportId, kind, rtpParameters } = produceBody.parse(req.body);
+    const { channelId, transportId, kind, rtpParameters, source } = produceBody.parse(req.body);
 
     const room = getRoom(channelId);
     if (!room) {
@@ -362,18 +414,36 @@ export const produce = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const videoSource: ProducerSource | undefined =
+      kind === 'video' ? (source ?? 'camera') : undefined;
+
     const producer = await peer.sendTransport.produce({
       kind,
       rtpParameters: rtpParameters as any,
+      appData: videoSource ? { source: videoSource } : {},
     });
 
     peer.producers.set(producer.id, producer);
 
-    producer.on('transportclose', () => {
+    const notifyProducerClosed = () => {
+      if (!peer.producers.has(producer.id)) return;
       peer.producers.delete(producer.id);
-    });
+      void emitProducerClosed(
+        channelId,
+        userId,
+        producer.id,
+        kind,
+        videoSource
+      );
+    };
 
-    res.json({ producerId: producer.id });
+    producer.on('transportclose', notifyProducerClosed);
+    producer.observer.on('close', notifyProducerClosed);
+
+    res.json({
+      producerId: producer.id,
+      ...(videoSource ? { source: videoSource } : {}),
+    });
   } catch (error) {
     res.status(400).json({
       error: error instanceof Error ? error.message : 'Failed to produce',
@@ -415,11 +485,18 @@ export const consume = async (req: Request, res: Response): Promise<void> => {
       peer.consumers.delete(consumer.id);
     });
 
+    const found = findProducerInRoom(room, producerId);
+    const source =
+      found && found.producer.kind === 'video'
+        ? producerSourceFromProducer(found.producer)
+        : undefined;
+
     res.json({
       consumerId: consumer.id,
       producerId,
       kind: consumer.kind,
       rtpParameters: consumer.rtpParameters,
+      ...(source ? { source } : {}),
     });
   } catch (error) {
     res.status(400).json({

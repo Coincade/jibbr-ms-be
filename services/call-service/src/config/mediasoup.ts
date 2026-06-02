@@ -57,22 +57,60 @@ const stripEnvQuotes = (value: string | undefined): string | undefined => {
   return trimmed;
 };
 
-export const getIceServers = () => {
-  const servers: { urls: string | string[]; username?: string; credential?: string }[] = [];
+export type IceServerConfig = {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+};
 
-  const stunUrl = stripEnvQuotes(process.env.STUN_URL) || 'stun:stun.l.google.com:19302';
-  servers.push({ urls: stunUrl });
-
+export const isTurnConfigured = (): boolean => {
   const turnUrl = stripEnvQuotes(process.env.TURN_URL);
   const turnUsername = stripEnvQuotes(process.env.TURN_USERNAME);
   const turnCredential = stripEnvQuotes(process.env.TURN_CREDENTIAL);
-  if (turnUrl && turnUsername && turnCredential) {
-    servers.push({
-      urls: turnUrl,
-      username: turnUsername,
-      credential: turnCredential,
-    });
+  return !!(turnUrl && turnUsername && turnCredential);
+};
+
+/** Log TURN/STUN status once at startup for ops visibility. */
+export const logIceServerStatus = (): void => {
+  const stun = stripEnvQuotes(process.env.STUN_URL) || 'stun:stun.l.google.com:19302';
+  if (isTurnConfigured()) {
+    console.log(`[call-service] ICE: STUN (${stun}) + TURN configured`);
+    return;
+  }
+  console.warn(
+    `[call-service] ICE: STUN only (${stun}). Set TURN_URL, TURN_USERNAME, TURN_CREDENTIAL for restrictive networks.`
+  );
+};
+
+export const getIceServers = (): IceServerConfig[] => {
+  const servers: IceServerConfig[] = [];
+
+  const stunUrl = stripEnvQuotes(process.env.STUN_URL) || 'stun:stun.l.google.com:19302';
+  for (const url of stunUrl.split(',').map((s) => s.trim()).filter(Boolean)) {
+    servers.push({ urls: url });
+  }
+
+  if (isTurnConfigured()) {
+    const turnUrl = stripEnvQuotes(process.env.TURN_URL)!;
+    const turnUsername = stripEnvQuotes(process.env.TURN_USERNAME)!;
+    const turnCredential = stripEnvQuotes(process.env.TURN_CREDENTIAL)!;
+    for (const url of turnUrl.split(',').map((s) => s.trim()).filter(Boolean)) {
+      servers.push({
+        urls: url,
+        username: turnUsername,
+        credential: turnCredential,
+      });
+    }
   }
 
   return servers;
 };
+
+/** VP8 simulcast layers for camera (not screen). */
+export const getCameraEncodings = () => [
+  { rid: 'r0', maxBitrate: 150_000, scaleResolutionDownBy: 4 },
+  { rid: 'r1', maxBitrate: 500_000, scaleResolutionDownBy: 2 },
+  { rid: 'r2', maxBitrate: 1_200_000 },
+];
+
+export const getScreenEncodings = () => [{ maxBitrate: 1_500_000 }];

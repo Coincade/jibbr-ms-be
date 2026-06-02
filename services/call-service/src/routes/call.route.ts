@@ -11,6 +11,8 @@ import {
   endConversationCall,
   updateCallMediaState,
   listWorkspaceHuddleHistory,
+  listWorkspaceHuddlesLive,
+  listChannelHuddlesHistory,
   createWebRtcTransport,
   connectWebRtcTransport,
   produce,
@@ -41,6 +43,8 @@ router.post('/conversations/:conversationId/call/end', auth, endConversationCall
 
 router.post('/call/media-state', auth, updateCallMediaState);
 router.get('/workspaces/:workspaceId/huddles/history', auth, listWorkspaceHuddleHistory);
+router.get('/workspaces/:workspaceId/huddles/live', auth, listWorkspaceHuddlesLive);
+router.get('/channels/:channelId/huddles/history', auth, listChannelHuddlesHistory);
 
 router.post('/call/transport', auth, createWebRtcTransport);
 router.post('/call/transport/:transportId/connect', auth, connectWebRtcTransport);

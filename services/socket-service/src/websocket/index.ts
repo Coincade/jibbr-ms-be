@@ -22,6 +22,10 @@ import {
 } from './handlers/message.handler.js';
 import { handleAddReaction, handleRemoveReaction } from './handlers/reaction.handler.js';
 import {
+  fanoutWorkspaceHuddleFromChannel,
+  fanoutWorkspaceHuddleFromConversation,
+} from '../services/workspace-huddle-broadcast.service.js';
+import {
   handleSendDirectMessage,
   handleEditDirectMessage,
   handleDeleteDirectMessage,
@@ -311,6 +315,12 @@ const handleConnection = (socket: SocketLike): void => {
       startedByName: user.name,
       timestamp: new Date().toISOString(),
     });
+    void fanoutWorkspaceHuddleFromChannel(channelId, {
+      active: true,
+      participantCount: 1,
+      hostUserId: user.id,
+      startedByName: user.name,
+    });
   });
 
   socket.on('channel_call_join', async (data) => {
@@ -331,6 +341,7 @@ const handleConnection = (socket: SocketLike): void => {
       userName: user.name,
       timestamp: new Date().toISOString(),
     });
+    void fanoutWorkspaceHuddleFromChannel(channelId, { active: true });
   });
 
   socket.on('channel_call_leave', async (data) => {
@@ -344,8 +355,47 @@ const handleConnection = (socket: SocketLike): void => {
     });
   });
 
+  const relayProducerClosed = (
+    scope: 'channel' | 'conversation',
+    data: {
+      channelId?: string;
+      conversationId?: string;
+      producerId?: string;
+      userId?: string;
+      kind?: string;
+      source?: string;
+    }
+  ) => {
+    if (!data.producerId) return;
+    const payload = {
+      ...data,
+      userId: data.userId ?? user.id,
+      timestamp: new Date().toISOString(),
+    };
+    if (scope === 'channel' && data.channelId) {
+      socket.to(data.channelId).emit('channel_call_producer_closed', payload);
+    }
+    if (scope === 'conversation' && data.conversationId) {
+      socket.to(data.conversationId).emit('conversation_call_producer_closed', payload);
+    }
+  };
+
+  socket.on('channel_call_producer_closed', async (data) => {
+    const { channelId } = data || {};
+    if (!channelId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    relayProducerClosed('channel', data);
+  });
+
+  socket.on('conversation_call_producer_closed', async (data) => {
+    const { conversationId } = data || {};
+    if (!conversationId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    relayProducerClosed('conversation', data);
+  });
+
   socket.on('channel_call_producer_ready', async (data) => {
-    const { channelId, producerId, kind, sessionId } = data || {};
+    const { channelId, producerId, kind, sessionId, source } = data || {};
     if (!channelId || !producerId) return;
     if (!(socket.data as any).allowedChannels?.has(channelId)) {
       const isMember = await validateChannelMembership(user.id, channelId);
@@ -358,6 +408,7 @@ const handleConnection = (socket: SocketLike): void => {
       sessionId,
       producerId,
       kind,
+      source: source === 'screen' ? 'screen' : kind === 'video' ? 'camera' : undefined,
       userId: user.id,
       userName: user.name,
     });
@@ -384,6 +435,7 @@ const handleConnection = (socket: SocketLike): void => {
       endedBy: user.id,
       timestamp: new Date().toISOString(),
     });
+    void fanoutWorkspaceHuddleFromChannel(channelId, { active: false });
   });
 
   // DM / conversation huddle (same mediasoup room id: conv:{conversationId})
@@ -406,6 +458,12 @@ const handleConnection = (socket: SocketLike): void => {
     };
     socket.to(conversationId).emit('conversation_call_started', payload);
     socket.emit('conversation_call_started', payload);
+    void fanoutWorkspaceHuddleFromConversation(conversationId, {
+      active: true,
+      participantCount: 1,
+      hostUserId: user.id,
+      startedByName: user.name,
+    });
   });
 
   socket.on('conversation_call_join', async (data) => {
@@ -426,6 +484,7 @@ const handleConnection = (socket: SocketLike): void => {
       userName: user.name,
       timestamp: new Date().toISOString(),
     });
+    void fanoutWorkspaceHuddleFromConversation(conversationId, { active: true });
   });
 
   socket.on('conversation_call_leave', async (data) => {
@@ -440,7 +499,7 @@ const handleConnection = (socket: SocketLike): void => {
   });
 
   socket.on('conversation_call_producer_ready', async (data) => {
-    const { conversationId, producerId, kind, sessionId } = data || {};
+    const { conversationId, producerId, kind, sessionId, source } = data || {};
     if (!conversationId || !producerId) return;
     if (!(socket.data as any).allowedConversations?.has(conversationId)) {
       const allowed = await validateConversationParticipation(user.id, conversationId);
@@ -453,6 +512,7 @@ const handleConnection = (socket: SocketLike): void => {
       sessionId,
       producerId,
       kind,
+      source: source === 'screen' ? 'screen' : kind === 'video' ? 'camera' : undefined,
       userId: user.id,
       userName: user.name,
     });
@@ -479,6 +539,7 @@ const handleConnection = (socket: SocketLike): void => {
       endedBy: user.id,
       timestamp: new Date().toISOString(),
     });
+    void fanoutWorkspaceHuddleFromConversation(conversationId, { active: false });
   });
 
   socket.on('ping', () => {
@@ -682,6 +743,26 @@ export const broadcastToChannel = (channelId: string, event: string, data: any) 
 
 export const broadcastToConversation = (conversationId: string, event: string, data: any) => {
   io.to(conversationId).emit(event, data);
+};
+
+export const broadcastWorkspaceHuddleUpdate = (
+  workspaceId: string,
+  event: string,
+  data: any
+) => {
+  io.to(getWorkspaceRoomKey(workspaceId)).emit(event, data);
+};
+
+export const broadcastChatMessage = (
+  roomId: string,
+  scope: 'channel' | 'conversation',
+  message: any
+) => {
+  if (scope === 'channel') {
+    io.to(roomId).emit('new_message', message);
+    return;
+  }
+  io.to(roomId).emit('new_direct_message', message);
 };
 
 export const sendToUser = (userId: string, event: string, data: any) => {

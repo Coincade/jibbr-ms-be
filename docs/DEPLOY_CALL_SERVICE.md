@@ -57,6 +57,8 @@ Edit `services/call-service/.env` (see `.env.example`):
 - [ ] `MEDIASOUP_RTC_MIN_PORT=40000` / `MAX=49999`
 - [ ] `ALLOWED_ORIGINS` — staging/prod DO app URLs + `http://localhost:5173`
 - [ ] Optional: `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` (no quotes on credential)
+- [ ] **Producer lifecycle (Phase C+):** same `INTERNAL_SERVICE_SECRET` on **call-service** and **socket-service**; `SOCKET_SERVICE_INTERNAL_URL` on call-service → socket HTTP (e.g. `https://<socket-app-url>` or `http://localhost:3004` locally). Startup log should show `ICE: STUN + TURN` or `STUN only` warning.
+- [ ] **Huddles product (Phase D):** workspace fan-out + huddle-ended chat messages use the same internal secret. See [HUDDLES.md](./HUDDLES.md).
 
 ### Database (Neon)
 

@@ -1,6 +1,7 @@
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import { realtimeMetrics } from './services/realtime-observability.service.js';
+import internalCallRoutes from './routes/internal-call.route.js';
 
 export const createSocketApp = (): Application => {
   const app: Application = express();
@@ -23,6 +24,8 @@ export const createSocketApp = (): Application => {
       timestamp: new Date().toISOString(),
     });
   });
+
+  app.use('/internal', internalCallRoutes);
 
   app.get('/health/realtime', (_req: Request, res: Response) => {
     res.json({

@@ -8,11 +8,27 @@ import type {
 import { getNextWorker } from './workers.js';
 import { mediaCodecs } from '../config/mediasoup.js';
 import { endHuddleSessionRecord } from '../services/huddle-session.service.js';
+import { createHuddleEndedMessage } from '../services/huddle-ended-message.service.js';
+import {
+  buildWorkspaceHuddleInactivePayload,
+  resolveWorkspaceIdForRoom,
+} from '../services/huddle-live.service.js';
+import { emitWorkspaceHuddleUpdate } from '../services/call-signal.service.js';
+import { producerSourceFromProducer, type ProducerSource } from './producer-source.js';
+
+export type { ProducerSource };
 
 export type RemoteProducerInfo = {
   producerId: string;
   userId: string;
   kind: 'audio' | 'video';
+  source?: ProducerSource;
+};
+
+export type ParticipantProducerInfo = {
+  producerId: string;
+  kind: 'audio' | 'video';
+  source?: ProducerSource;
 };
 
 export type Peer = {
@@ -145,9 +161,24 @@ const closeRoom = async (roomId: string): Promise<void> => {
   if (!room) return;
 
   const peakCount = Math.max(room.peakParticipantCount, room.peers.size, 1);
+  // Lock via DB update (closeRoom can be invoked concurrently from multiple peers).
+  const endedCount = await endHuddleSessionRecord(roomId, peakCount);
+  const shouldPost = endedCount > 0;
+
+  if (shouldPost) {
+    await createHuddleEndedMessage(roomId, room, peakCount);
+
+    const workspaceId = await resolveWorkspaceIdForRoom(roomId);
+    if (workspaceId) {
+      void emitWorkspaceHuddleUpdate(
+        workspaceId,
+        buildWorkspaceHuddleInactivePayload(workspaceId, roomId)
+      );
+    }
+  }
+
   room.router.close();
   rooms.delete(roomId);
-  await endHuddleSessionRecord(roomId, peakCount);
 };
 
 export const listOtherParticipants = (
@@ -173,6 +204,9 @@ export const listRemoteProducers = (room: Room, excludeUserId: string): RemotePr
         producerId: producer.id,
         userId,
         kind: producer.kind,
+        ...(producer.kind === 'video'
+          ? { source: producerSourceFromProducer(producer) }
+          : {}),
       });
     }
   }
@@ -189,6 +223,13 @@ export const getRoomSnapshot = (roomId: string) => {
     audioMuted: p.audioMuted,
     videoMuted: p.videoMuted,
     producerIds: Array.from(p.producers.keys()),
+    producers: Array.from(p.producers.values()).map((producer) => ({
+      producerId: producer.id,
+      kind: producer.kind,
+      ...(producer.kind === 'video'
+        ? { source: producerSourceFromProducer(producer) }
+        : {}),
+    })),
   }));
 
   return {
@@ -202,3 +243,14 @@ export const getRoomSnapshot = (roomId: string) => {
 };
 
 export const getActiveRoomIds = (): string[] => Array.from(rooms.keys());
+
+export const findProducerInRoom = (
+  room: Room,
+  producerId: string
+): { producer: Producer; userId: string } | undefined => {
+  for (const [userId, peer] of room.peers) {
+    const producer = peer.producers.get(producerId);
+    if (producer) return { producer, userId };
+  }
+  return undefined;
+};

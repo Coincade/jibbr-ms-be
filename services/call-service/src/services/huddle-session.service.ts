@@ -45,18 +45,40 @@ export const startHuddleSessionRecord = async (
 export const endHuddleSessionRecord = async (
   roomId: string,
   participantCount: number
-): Promise<void> => {
+): Promise<number> => {
   try {
-    await prisma.huddleSession.updateMany({
+    const result = await prisma.huddleSession.updateMany({
       where: { roomId, endedAt: null },
       data: {
         endedAt: new Date(),
         peakParticipantCount: participantCount,
       },
     });
+    return result.count;
   } catch (error) {
     console.warn('[call-service] Failed to record huddle session end:', error);
+    return 0;
   }
+};
+
+export const listChannelHuddleHistory = async (channelId: string, limit = 20) => {
+  return prisma.huddleSession.findMany({
+    where: { channelId },
+    orderBy: { startedAt: 'desc' },
+    take: limit,
+    select: {
+      id: true,
+      roomId: true,
+      channelId: true,
+      conversationId: true,
+      startedById: true,
+      startedAt: true,
+      endedAt: true,
+      peakParticipantCount: true,
+      startedBy: { select: { id: true, name: true, image: true } },
+      channel: { select: { id: true, name: true } },
+    },
+  });
 };
 
 export const listRecentHuddles = async (
