@@ -65,6 +65,8 @@ const mediaStateBody = z.object({
   videoMuted: z.boolean().optional(),
 });
 
+const MAX_PARTICIPANTS = Number.parseInt(process.env.MAX_HUDDLE_PARTICIPANTS || '25', 10);
+
 const getUserId = (req: Request): string => {
   const user = (req as AuthRequest).user;
   if (!user?.id) throw new Error('Unauthorized');
@@ -83,6 +85,12 @@ const joinRoom = async (req: Request, res: Response, roomId: string): Promise<vo
     room = await getOrCreateRoom(roomId, { hostUserId: userId });
     const huddleDbId = await startHuddleSessionRecord(roomId, userId, room.sessionId);
     if (huddleDbId) room.huddleDbId = huddleDbId;
+  }
+
+  // Enforce participant cap before adding the new peer
+  if (!room.peers.has(userId) && room.peers.size >= MAX_PARTICIPANTS) {
+    res.status(403).json({ error: 'huddle_full', message: `This huddle is full (max ${MAX_PARTICIPANTS} participants)` });
+    return;
   }
 
   getOrCreatePeer(room, userId, displayName);
@@ -109,6 +117,7 @@ const joinRoom = async (req: Request, res: Response, roomId: string): Promise<vo
     routerRtpCapabilities: room.router.rtpCapabilities,
     iceServers: getIceServers(),
     turnConfigured: isTurnConfigured(),
+    participantMax: MAX_PARTICIPANTS,
     existingProducers,
     participants,
   });
@@ -530,5 +539,93 @@ export const resumeConsumer = async (req: Request, res: Response): Promise<void>
     res.status(400).json({
       error: error instanceof Error ? error.message : 'Failed to resume consumer',
     });
+  }
+};
+
+const pauseResumeProducerBody = z.object({ channelId: z.string().min(1) });
+
+export const pauseProducer = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const producerId = z.string().parse(req.params.producerId);
+    const { channelId } = pauseResumeProducerBody.parse(req.body);
+
+    const room = getRoom(channelId);
+    if (!room) { res.status(404).json({ error: 'No active call' }); return; }
+
+    const peer = room.peers.get(userId);
+    const producer = peer?.producers.get(producerId);
+    if (!producer) { res.status(404).json({ error: 'Producer not found' }); return; }
+
+    await producer.pause();
+    res.json({ paused: true });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to pause producer' });
+  }
+};
+
+export const resumeProducer = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const producerId = z.string().parse(req.params.producerId);
+    const { channelId } = pauseResumeProducerBody.parse(req.body);
+
+    const room = getRoom(channelId);
+    if (!room) { res.status(404).json({ error: 'No active call' }); return; }
+
+    const peer = room.peers.get(userId);
+    const producer = peer?.producers.get(producerId);
+    if (!producer) { res.status(404).json({ error: 'Producer not found' }); return; }
+
+    await producer.resume();
+    res.json({ resumed: true });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to resume producer' });
+  }
+};
+
+const consumerLayersBody = z.object({
+  channelId: z.string().min(1),
+  spatialLayer: z.number().int().min(0).max(2),
+  temporalLayer: z.number().int().min(0).max(2).optional(),
+});
+
+export const setConsumerLayers = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const consumerId = z.string().parse(req.params.consumerId);
+    const { channelId, spatialLayer, temporalLayer } = consumerLayersBody.parse(req.body);
+
+    const room = getRoom(channelId);
+    if (!room) { res.status(404).json({ error: 'No active call' }); return; }
+
+    const peer = room.peers.get(userId);
+    const consumer = peer?.consumers.get(consumerId);
+    if (!consumer) { res.status(404).json({ error: 'Consumer not found' }); return; }
+
+    await consumer.setPreferredLayers({ spatialLayer, temporalLayer: temporalLayer ?? spatialLayer });
+    res.json({ ok: true, spatialLayer });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to set consumer layers' });
+  }
+};
+
+const statsBody = z.object({
+  channelId: z.string().min(1),
+  rttMs: z.number().nullable().optional(),
+  packetsLostPct: z.number().optional(),
+  outboundBitrateKbps: z.number().optional(),
+});
+
+export const recordCallStats = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { channelId, rttMs, packetsLostPct, outboundBitrateKbps } = statsBody.parse(req.body);
+    console.log(
+      `[call-stats] user=${userId} room=${channelId} rtt=${rttMs}ms loss=${packetsLostPct}% bitrate=${outboundBitrateKbps}kbps`
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to record stats' });
   }
 };

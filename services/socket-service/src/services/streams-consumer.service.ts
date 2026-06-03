@@ -157,9 +157,9 @@ const claimStaleMessages = async (
 };
 
 /**
- * Initialize Streams consumer with Socket.IO instance
+ * Set the native WebSocket broadcast instance for the streams consumer.
  */
-export function setSocketIOInstance(io: IoLike) {
+export function setBroadcastIo(io: IoLike) {
   ioInstance = io;
 }
 
@@ -168,7 +168,7 @@ export function setSocketIOInstance(io: IoLike) {
  */
 export async function startStreamsConsumer() {
   if (!ioInstance) {
-    throw new Error('Socket.IO instance not set. Call setSocketIOInstance() first.');
+    throw new Error('Broadcast instance not set. Call setBroadcastIo() first.');
   }
 
   if (isRunning) {

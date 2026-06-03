@@ -89,13 +89,19 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
 
   wss.on('close', () => clearInterval(heartbeat));
 
+  // Wire workspace huddle broadcast service to the native ws io instance
+  const { setWorkspaceHuddleIo } = await import(
+    '../services/workspace-huddle-broadcast.service.js'
+  );
+  setWorkspaceHuddleIo(io);
+
   // Streams consumer broadcasts -> same io-like API
   (async () => {
     try {
-      const { setSocketIOInstance, startStreamsConsumer } = await import(
+      const { setBroadcastIo, startStreamsConsumer } = await import(
         '../services/streams-consumer.service.js'
       );
-      setSocketIOInstance(io as any);
+      setBroadcastIo(io);
       await startStreamsConsumer();
       console.log('✅ Streams consumer initialized for WebSocket broadcasting');
     } catch (error) {

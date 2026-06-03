@@ -1,10 +1,10 @@
 import prisma from '../config/database.js';
 import { getWorkspaceRoomKey } from '../websocket/utils.js';
-import type { Server as SocketServer } from 'socket.io';
+import type { IoLike } from '../websocket/ws-compat.js';
 
-let ioRef: SocketServer | null = null;
+let ioRef: IoLike | null = null;
 
-export const setWorkspaceHuddleIo = (io: SocketServer): void => {
+export const setWorkspaceHuddleIo = (io: IoLike): void => {
   ioRef = io;
 };
 

@@ -6,6 +6,7 @@ import { Logger } from '@jibbr/logger';
 import { createCallApp } from './app.js';
 import { initMediasoupWorkers, closeMediasoupWorkers } from './mediasoup/workers.js';
 import { logIceServerStatus } from './config/mediasoup.js';
+import { initRedis, closeRedis } from './config/redis.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,6 +19,7 @@ const PORT = process.env.PORT || process.env.CALL_PORT || 3005;
 
 const start = async () => {
   try {
+    initRedis();
     await initMediasoupWorkers();
     logIceServerStatus();
     const app = createCallApp();
@@ -30,6 +32,7 @@ const start = async () => {
       logger.info('Shutting down call service...');
       server.close();
       await closeMediasoupWorkers();
+      await closeRedis();
       process.exit(0);
     };
 

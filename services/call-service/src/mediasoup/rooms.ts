@@ -5,8 +5,9 @@ import type {
   Router,
   WebRtcTransport,
 } from 'mediasoup/node/lib/types.js';
-import { getNextWorker } from './workers.js';
+import { getNextWorker, setOnWorkerDied } from './workers.js';
 import { mediaCodecs } from '../config/mediasoup.js';
+import { persistRoom, deletePersistedRoom, getPersistedRoom } from './rooms-redis.js';
 import { endHuddleSessionRecord } from '../services/huddle-session.service.js';
 import { createHuddleEndedMessage } from '../services/huddle-ended-message.service.js';
 import {
@@ -48,12 +49,28 @@ export type Room = {
   hostUserId: string;
   huddleDbId?: string;
   router: Router;
+  workerPid: number;
   peers: Map<string, Peer>;
   peakParticipantCount: number;
   createdAt: Date;
 };
 
 const rooms = new Map<string, Room>();
+
+const snapshotForRedis = (room: Room) => ({
+  roomId: room.roomId,
+  sessionId: room.sessionId,
+  hostUserId: room.hostUserId,
+  huddleDbId: room.huddleDbId,
+  createdAt: room.createdAt.toISOString(),
+  peakParticipantCount: room.peakParticipantCount,
+  peers: Array.from(room.peers.values()).map((p) => ({
+    userId: p.userId,
+    displayName: p.displayName,
+    audioMuted: p.audioMuted ?? false,
+    videoMuted: p.videoMuted ?? false,
+  })),
+});
 
 export const getOrCreateRoom = async (
   roomId: string,
@@ -62,21 +79,26 @@ export const getOrCreateRoom = async (
   const existing = rooms.get(roomId);
   if (existing) return existing;
 
+  // Try to restore metadata from Redis (e.g. after a restart)
+  const persisted = await getPersistedRoom(roomId);
+
   const worker = getNextWorker();
   const router = await worker.createRouter({ mediaCodecs });
 
   const room: Room = {
     roomId,
-    sessionId: randomUUID(),
-    hostUserId: options?.hostUserId ?? '',
-    huddleDbId: options?.huddleDbId,
+    sessionId: persisted?.sessionId ?? randomUUID(),
+    hostUserId: persisted?.hostUserId ?? options?.hostUserId ?? '',
+    huddleDbId: persisted?.huddleDbId ?? options?.huddleDbId,
     router,
+    workerPid: worker.pid,
     peers: new Map(),
-    peakParticipantCount: 0,
-    createdAt: new Date(),
+    peakParticipantCount: persisted?.peakParticipantCount ?? 0,
+    createdAt: persisted ? new Date(persisted.createdAt) : new Date(),
   };
 
   rooms.set(roomId, room);
+  void persistRoom(snapshotForRedis(room));
   return room;
 };
 
@@ -101,6 +123,7 @@ export const getOrCreatePeer = (room: Room, userId: string, displayName?: string
   } else if (displayName) {
     peer.displayName = displayName;
   }
+  void persistRoom(snapshotForRedis(room));
   return peer;
 };
 
@@ -114,6 +137,7 @@ export const setPeerMediaState = (
   if (!peer) return undefined;
   if (patch.audioMuted !== undefined) peer.audioMuted = patch.audioMuted;
   if (patch.videoMuted !== undefined) peer.videoMuted = patch.videoMuted;
+  void persistRoom(snapshotForRedis(room));
   return peer;
 };
 
@@ -179,6 +203,7 @@ const closeRoom = async (roomId: string): Promise<void> => {
 
   room.router.close();
   rooms.delete(roomId);
+  void deletePersistedRoom(roomId);
 };
 
 export const listOtherParticipants = (
@@ -243,6 +268,21 @@ export const getRoomSnapshot = (roomId: string) => {
 };
 
 export const getActiveRoomIds = (): string[] => Array.from(rooms.keys());
+
+/** Force-close all rooms whose router lived on the dead worker pid. */
+export const closeRoomsOnWorker = async (workerPid: number): Promise<void> => {
+  const affectedRoomIds = Array.from(rooms.values())
+    .filter((r) => r.workerPid === workerPid)
+    .map((r) => r.roomId);
+
+  if (affectedRoomIds.length === 0) return;
+  console.warn(`[rooms] Closing ${affectedRoomIds.length} room(s) on dead worker pid ${workerPid}`);
+
+  await Promise.allSettled(affectedRoomIds.map((id) => forceCloseRoom(id)));
+};
+
+// Wire worker-death callback so workers.ts can trigger room cleanup without a circular import.
+setOnWorkerDied(closeRoomsOnWorker);
 
 export const findProducerInRoom = (
   room: Room,
