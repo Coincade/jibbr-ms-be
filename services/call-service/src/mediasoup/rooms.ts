@@ -133,7 +133,8 @@ export const setPeerMediaState = (
   patch: { audioMuted?: boolean; videoMuted?: boolean }
 ): Peer | undefined => {
   const room = rooms.get(roomId);
-  const peer = room?.peers.get(userId);
+  if (!room) return undefined;
+  const peer = room.peers.get(userId);
   if (!peer) return undefined;
   if (patch.audioMuted !== undefined) peer.audioMuted = patch.audioMuted;
   if (patch.videoMuted !== undefined) peer.videoMuted = patch.videoMuted;
