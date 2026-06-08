@@ -39,7 +39,7 @@ DM rooms use `conv:{conversationId}` and `/conversations/:id/call/*`.
 
 **Channel / DM (room-scoped):** `channel_call_started`, `participant_joined`, `participant_left`, `new_producer`, `producer_closed`, `ended` (and `conversation_call_*`).
 
-**Workspace (strip / discovery):** `workspace_huddle_updated` — emitted to `workspace:{workspaceId}` on start/join/end and from call-service when a room closes.
+**Workspace (strip / discovery):** `workspace_huddle_updated` — channel huddles: emitted to `workspace:{workspaceId}`; **DM Jabbr:** emitted only to the `conversationId` socket room (participants), not the whole workspace.
 
 **Chat:** `new_message` / `new_direct_message` for huddle-ended system posts (`[jibbr:huddle-ended]{...}` in DB content).
 
@@ -63,3 +63,11 @@ DM rooms use `conv:{conversationId}` and `/conversations/:id/call/*`.
 3. Screen share — spotlight for both.
 4. Last person leaves — channel system message “Huddle ended · N min · M people”.
 5. Strip clears within one socket event (or ≤90s reconcile).
+
+## Observability (Phase 3)
+
+- **Client stats:** Electron posts `POST /api/call/stats` every 5s while in a huddle (`rttMs`, `packetsLostPct`, `outboundBitrateKbps`, `callQuality`).
+- **Server logs:** Structured JSON via `@jibbr/logger` — `huddle.stats` (info) and `huddle.stats.degraded` (warn, throttled 30s per user+room).
+- **Health:** `GET /health` on call-service — returns `healthy` | `degraded` | `unhealthy` (503 when unhealthy). Docker Compose includes a healthcheck.
+- **Script:** `./scripts/check-call-service-health.sh` (optional `CALL_SERVICE_URL=…`).
+- **Reconnect matrix:** [HUDDLES_RECONNECT_TESTS.md](./HUDDLES_RECONNECT_TESTS.md).

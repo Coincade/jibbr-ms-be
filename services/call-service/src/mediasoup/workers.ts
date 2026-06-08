@@ -58,6 +58,19 @@ export const getNextWorker = (): Worker => {
 /** Expose worker pid so rooms can track which worker owns their router. */
 export const getWorkerPid = (worker: Worker): number => worker.pid;
 
+export const getMediasoupWorkerStats = (): {
+  expected: number;
+  running: number;
+  pids: number[];
+} => {
+  const expected = Number.parseInt(process.env.MEDIASOUP_NUM_WORKERS || '1', 10);
+  return {
+    expected,
+    running: workers.length,
+    pids: workers.map((w) => w.pid),
+  };
+};
+
 export const closeMediasoupWorkers = async (): Promise<void> => {
   await Promise.all(workers.map((w) => w.close()));
   workers = [];

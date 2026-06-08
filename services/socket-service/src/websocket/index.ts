@@ -6,8 +6,10 @@ import {
 } from '../services/rate-limiter.js';
 import {
   removeClientFromAllChannels,
+  removeClientFromChannel,
   addClientToChannel,
   removeClientFromAllConversations,
+  removeClientFromConversation,
   addClientToConversation,
   validateChannelMembership,
   validateConversationParticipation,
@@ -209,7 +211,7 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('leave_channel', (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
-    removeClientFromAllChannels(socket, channelClients);
+    removeClientFromChannel(socket, channelId, channelClients);
     (socket.data as any).allowedChannels?.delete(channelId);
     socket.emit('left_channel', { channelId });
   });
@@ -251,7 +253,7 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('leave_conversation', (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
-    removeClientFromAllConversations(socket, conversationClients);
+    removeClientFromConversation(socket, conversationId, conversationClients);
     (socket.data as any).allowedConversations?.delete(conversationId);
     socket.emit('conversation_left', { conversationId });
   });

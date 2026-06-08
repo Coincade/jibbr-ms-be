@@ -81,6 +81,24 @@ export const removeClientFromAllChannels = (socket: SocketLike, channelClients: 
 };
 
 /**
+ * Remove client from a single channel room (preserves other channel subscriptions).
+ */
+export const removeClientFromChannel = (
+  socket: SocketLike,
+  channelId: string,
+  channelClients: ChannelClientsMap
+): void => {
+  const clients = channelClients.get(channelId);
+  if (!clients?.has(socket)) return;
+  clients.delete(socket);
+  socket.leave(channelId);
+  if (clients.size === 0) channelClients.delete(channelId);
+  if (process.env.WS_DEBUG === '1') {
+    console.log(`Client ${socket.id} removed from channel ${channelId}`);
+  }
+};
+
+/**
  * Remove client from all conversations
  */
 export const removeClientFromAllConversations = (socket: SocketLike, conversationClients: ConversationClientsMap): void => {
@@ -92,6 +110,24 @@ export const removeClientFromAllConversations = (socket: SocketLike, conversatio
         console.log(`Client ${socket.id} removed from conversation ${conversationId}`);
       }
     }
+  }
+};
+
+/**
+ * Remove client from a single conversation room (preserves other DM subscriptions).
+ */
+export const removeClientFromConversation = (
+  socket: SocketLike,
+  conversationId: string,
+  conversationClients: ConversationClientsMap
+): void => {
+  const clients = conversationClients.get(conversationId);
+  if (!clients?.has(socket)) return;
+  clients.delete(socket);
+  socket.leave(conversationId);
+  if (clients.size === 0) conversationClients.delete(conversationId);
+  if (process.env.WS_DEBUG === '1') {
+    console.log(`Client ${socket.id} removed from conversation ${conversationId}`);
   }
 };
 

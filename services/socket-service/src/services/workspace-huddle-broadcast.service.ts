@@ -61,15 +61,26 @@ export const fanoutWorkspaceHuddleFromChannel = async (
   });
 };
 
+/** DM Jabbr updates go only to conversation participants (not the whole workspace). */
+export const broadcastConversationHuddleUpdate = (
+  conversationId: string,
+  workspaceId: string,
+  data: Record<string, unknown>
+): void => {
+  if (!ioRef) return;
+  ioRef.to(conversationId).emit('workspace_huddle_updated', {
+    workspaceId,
+    conversationId,
+    roomId: `conv:${conversationId}`,
+    ...data,
+  });
+};
+
 export const fanoutWorkspaceHuddleFromConversation = async (
   conversationId: string,
   patch: Record<string, unknown>
 ): Promise<void> => {
   const workspaceId = await resolveWorkspaceIdForConversation(conversationId);
   if (!workspaceId) return;
-  broadcastWorkspaceHuddleUpdate(workspaceId, {
-    conversationId,
-    roomId: `conv:${conversationId}`,
-    ...patch,
-  });
+  broadcastConversationHuddleUpdate(conversationId, workspaceId, patch);
 };

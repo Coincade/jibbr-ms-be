@@ -15,6 +15,19 @@ export const initRedis = (): void => {
   client.on('connect', () => console.log('[call-service] Redis connected'));
 };
 
+export const getRedisHealth = (): {
+  configured: boolean;
+  connected: boolean;
+} => {
+  if (!client) {
+    return { configured: false, connected: false };
+  }
+  return {
+    configured: true,
+    connected: client.status === 'ready',
+  };
+};
+
 export const closeRedis = async (): Promise<void> => {
   if (client) {
     await client.quit();

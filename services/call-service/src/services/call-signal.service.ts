@@ -55,6 +55,22 @@ export const emitWorkspaceHuddleUpdate = async (
   workspaceId: string,
   data: CallSignalPayload
 ): Promise<void> => {
+  const roomId =
+    typeof data.roomId === 'string'
+      ? data.roomId
+      : typeof data.conversationId === 'string'
+        ? `conv:${data.conversationId}`
+        : undefined;
+
+  // Direct Jabbr: discovery + state patches only to conversation participants.
+  if (roomId && isConversationRoom(roomId)) {
+    await emitCallRoomSignal(roomId, 'workspace_huddle_updated', {
+      workspaceId,
+      ...data,
+    });
+    return;
+  }
+
   const baseUrl = getInternalSocketUrl();
   const secret = getInternalSecret();
   if (!baseUrl || !secret) return;

@@ -12,6 +12,7 @@ import { endHuddleSessionRecord } from '../services/huddle-session.service.js';
 import { createHuddleEndedMessage } from '../services/huddle-ended-message.service.js';
 import {
   buildWorkspaceHuddleInactivePayload,
+  buildWorkspaceHuddlePayload,
   resolveWorkspaceIdForRoom,
 } from '../services/huddle-live.service.js';
 import { emitWorkspaceHuddleUpdate } from '../services/call-signal.service.js';
@@ -158,10 +159,22 @@ export const removePeer = async (roomId: string, userId: string): Promise<{ room
   peer.sendTransport?.close();
   peer.recvTransport?.close();
   room.peers.delete(userId);
+  void persistRoom(snapshotForRedis(room));
 
   if (room.peers.size === 0) {
     await closeRoom(roomId);
     return { roomEmptied: true };
+  }
+
+  const snapshot = getRoomSnapshot(roomId);
+  if (snapshot) {
+    const workspaceId = await resolveWorkspaceIdForRoom(roomId);
+    if (workspaceId) {
+      void emitWorkspaceHuddleUpdate(
+        workspaceId,
+        buildWorkspaceHuddlePayload(workspaceId, roomId, snapshot)
+      );
+    }
   }
 
   return { roomEmptied: false };

@@ -28,6 +28,7 @@ import {
   buildWorkspaceHuddlePayload,
   resolveWorkspaceIdForRoom,
 } from '../services/huddle-live.service.js';
+import { recordCallStatsEvent } from '../services/call-stats.service.js';
 import { conversationRoomId } from '../utils/room-id.js';
 
 const roomIdBody = z.object({
@@ -615,15 +616,21 @@ const statsBody = z.object({
   rttMs: z.number().nullable().optional(),
   packetsLostPct: z.number().optional(),
   outboundBitrateKbps: z.number().optional(),
+  callQuality: z.enum(['good', 'poor', 'bad']).optional(),
 });
 
 export const recordCallStats = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = getUserId(req);
-    const { channelId, rttMs, packetsLostPct, outboundBitrateKbps } = statsBody.parse(req.body);
-    console.log(
-      `[call-stats] user=${userId} room=${channelId} rtt=${rttMs}ms loss=${packetsLostPct}% bitrate=${outboundBitrateKbps}kbps`
-    );
+    const body = statsBody.parse(req.body);
+    recordCallStatsEvent({
+      userId,
+      roomId: body.channelId,
+      rttMs: body.rttMs,
+      packetsLostPct: body.packetsLostPct,
+      outboundBitrateKbps: body.outboundBitrateKbps,
+      callQuality: body.callQuality,
+    });
     res.json({ ok: true });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to record stats' });
