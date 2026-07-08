@@ -434,6 +434,60 @@ const handleConnection = (socket: SocketLike): void => {
     });
   });
 
+  socket.on('channel_call_annotation_stroke', async (data) => {
+    const { channelId, stroke, sessionId } = data || {};
+    if (!channelId || !stroke?.id) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    socket.to(channelId).emit('channel_call_annotation_stroke', {
+      channelId,
+      sessionId,
+      stroke: {
+        ...stroke,
+        authorUserId: user.id,
+        authorName: user.name,
+      },
+    });
+  });
+
+  socket.on('channel_call_annotation_clear', async (data) => {
+    const { channelId, screenOwnerUserId, sessionId } = data || {};
+    if (!channelId || !screenOwnerUserId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    io.to(channelId).emit('channel_call_annotation_clear', {
+      channelId,
+      screenOwnerUserId,
+      sessionId,
+      clearedBy: user.id,
+    });
+  });
+
+  socket.on('channel_call_annotation_permission', async (data) => {
+    const { channelId, screenOwnerUserId, allowOthersToDraw, sessionId } = data || {};
+    if (!channelId || !screenOwnerUserId) return;
+    if (user.id !== screenOwnerUserId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    socket.to(channelId).emit('channel_call_annotation_permission', {
+      channelId,
+      screenOwnerUserId,
+      allowOthersToDraw: !!allowOthersToDraw,
+      sessionId,
+      updatedBy: user.id,
+    });
+  });
+
+  socket.on('channel_call_annotation_erase', async (data) => {
+    const { channelId, screenOwnerUserId, strokeIds, sessionId } = data || {};
+    if (!channelId || !screenOwnerUserId || !Array.isArray(strokeIds) || !strokeIds.length) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    socket.to(channelId).emit('channel_call_annotation_erase', {
+      channelId,
+      screenOwnerUserId,
+      strokeIds,
+      sessionId,
+      erasedBy: user.id,
+    });
+  });
+
   socket.on('channel_call_end', async (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
@@ -535,6 +589,60 @@ const handleConnection = (socket: SocketLike): void => {
       userId: user.id,
       audioMuted: !!audioMuted,
       videoMuted: !!videoMuted,
+    });
+  });
+
+  socket.on('conversation_call_annotation_stroke', async (data) => {
+    const { conversationId, stroke, sessionId } = data || {};
+    if (!conversationId || !stroke?.id) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    socket.to(conversationId).emit('conversation_call_annotation_stroke', {
+      conversationId,
+      sessionId,
+      stroke: {
+        ...stroke,
+        authorUserId: user.id,
+        authorName: user.name,
+      },
+    });
+  });
+
+  socket.on('conversation_call_annotation_clear', async (data) => {
+    const { conversationId, screenOwnerUserId, sessionId } = data || {};
+    if (!conversationId || !screenOwnerUserId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    io.to(conversationId).emit('conversation_call_annotation_clear', {
+      conversationId,
+      screenOwnerUserId,
+      sessionId,
+      clearedBy: user.id,
+    });
+  });
+
+  socket.on('conversation_call_annotation_permission', async (data) => {
+    const { conversationId, screenOwnerUserId, allowOthersToDraw, sessionId } = data || {};
+    if (!conversationId || !screenOwnerUserId) return;
+    if (user.id !== screenOwnerUserId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    socket.to(conversationId).emit('conversation_call_annotation_permission', {
+      conversationId,
+      screenOwnerUserId,
+      allowOthersToDraw: !!allowOthersToDraw,
+      sessionId,
+      updatedBy: user.id,
+    });
+  });
+
+  socket.on('conversation_call_annotation_erase', async (data) => {
+    const { conversationId, screenOwnerUserId, strokeIds, sessionId } = data || {};
+    if (!conversationId || !screenOwnerUserId || !Array.isArray(strokeIds) || !strokeIds.length) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    socket.to(conversationId).emit('conversation_call_annotation_erase', {
+      conversationId,
+      screenOwnerUserId,
+      strokeIds,
+      sessionId,
+      erasedBy: user.id,
     });
   });
 
