@@ -6,6 +6,9 @@
 # container binds the host's loopback/public interfaces directly — 127.0.0.1 is
 # correct. Use CALL_SERVICE_URL only for remote checks from another machine.
 #
+# JSON parsing uses python3 (standard on Ubuntu droplets). Host Node.js is NOT
+# required — call-service runs inside Docker.
+#
 # Usage:
 #   ./scripts/check-call-service-health.sh
 #   CALL_HEALTH_ATTEMPTS=30 CALL_HEALTH_SLEEP_SECS=2 ./scripts/check-call-service-health.sh
@@ -22,6 +25,53 @@ if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required" >&2
   exit 2
 fi
+
+json_get_status() {
+  local payload="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$payload" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(data.get("status") or "unknown")
+except Exception:
+    print("invalid")
+'
+    return
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$payload" | jq -r '.status // "invalid"' 2>/dev/null || echo "invalid"
+    return
+  fi
+  # Last-resort regex (droplets without python3/jq)
+  local status
+  status="$(printf '%s' "$payload" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  if [ -n "$status" ]; then
+    printf '%s\n' "$status"
+  else
+    printf 'invalid\n'
+  fi
+}
+
+print_health_hints() {
+  local payload="$1"
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+  printf '%s' "$payload" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for warning in data.get("warnings") or []:
+    print(f"warning: {warning}", file=sys.stderr)
+if data.get("turnConfigured") is False:
+    print("hint: set TURN_URL / TURN_USERNAME / TURN_CREDENTIAL for production NAT traversal", file=sys.stderr)
+if data.get("announcedIpConfigured") is False:
+    print("hint: set MEDIASOUP_ANNOUNCED_IP to this host public IP", file=sys.stderr)
+'
+}
 
 response=""
 for attempt in $(seq 1 "$ATTEMPTS"); do
@@ -40,38 +90,9 @@ if [ -z "$response" ]; then
   exit 1
 fi
 
-status="$(printf '%s' "$response" | node -e "
-  let data = '';
-  process.stdin.on('data', (c) => (data += c));
-  process.stdin.on('end', () => {
-    try {
-      const j = JSON.parse(data);
-      process.stdout.write(String(j.status || 'unknown'));
-    } catch {
-      process.stdout.write('invalid');
-    }
-  });
-")"
-
+status="$(json_get_status "$response")"
 echo "$response"
-
-printf '%s' "$response" | node -e "
-  let data = '';
-  process.stdin.on('data', (c) => (data += c));
-  process.stdin.on('end', () => {
-    try {
-      const j = JSON.parse(data);
-      const warnings = Array.isArray(j.warnings) ? j.warnings : [];
-      for (const w of warnings) console.error('warning:', w);
-      if (j.turnConfigured === false) {
-        console.error('hint: set TURN_URL / TURN_USERNAME / TURN_CREDENTIAL for production NAT traversal');
-      }
-      if (j.announcedIpConfigured === false) {
-        console.error('hint: set MEDIASOUP_ANNOUNCED_IP to this host public IP');
-      }
-    } catch { /* ignore */ }
-  });
-"
+print_health_hints "$response"
 
 case "$status" in
   healthy) exit 0 ;;
