@@ -1,10 +1,14 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { execFileSync, spawnSync } from 'child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 
-const scriptPath = '/Users/connect/Jibbr/jibbr-ms-be/scripts/check-call-service-health.sh';
+const scriptPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../scripts/check-call-service-health.sh'
+);
 const tempDirs: string[] = [];
 
 const makeFakeCurlDir = (scriptBody: string): string => {

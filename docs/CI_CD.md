@@ -90,9 +90,16 @@ Required secrets:
 
 The remote host must already contain:
 
-- `/opt/jibbr-ms-be`
-- `docker-compose.call-image.yml`
+- `/opt/jibbr-ms-be` (base directory)
+- Docker + Docker Compose installed
+- Docker Hub login if the image is private
+
+Each deploy syncs these files from the repo checkout:
+
+- `scripts/deploy-call-service-remote.sh`
 - `scripts/check-call-service-health.sh`
+- `docker-compose.call-image.yml`
+- `services/call-service/.env` (from `*_CALL_SERVICE_ENV`)
 
 ### SSH key requirements
 

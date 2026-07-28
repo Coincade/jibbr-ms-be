@@ -11,16 +11,23 @@ const withPoolTuning = (url: string | undefined): string | undefined => {
   return tuned;
 };
 
+const databaseUrl = withPoolTuning(process.env.DATABASE_URL);
+
 // OPTIMIZATION: Configure Prisma for better performance
 const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['warn', 'error'],
   errorFormat: 'pretty',
-  // Connection pool optimization for faster queries
-  datasources: {
-    db: {
-      url: withPoolTuning(process.env.DATABASE_URL),
-    },
-  },
+  // Only override the datasource when we have a URL — passing `undefined`
+  // makes PrismaClient construction fail (e.g. under Turbo strict env).
+  ...(databaseUrl
+    ? {
+        datasources: {
+          db: {
+            url: databaseUrl,
+          },
+        },
+      }
+    : {}),
 });
 
 // OPTIMIZATION: Enable connection pooling hints

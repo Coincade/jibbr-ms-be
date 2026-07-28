@@ -396,17 +396,27 @@ jobs:
       - name: Add droplet host key
         run: ssh-keyscan -H "${{ secrets.STAGING_CALL_DROPLET_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Write remote env file
+      - name: Prepare remote dirs and env file
         run: |
+          REMOTE="${{ secrets.STAGING_CALL_DROPLET_USER }}@${{ secrets.STAGING_CALL_DROPLET_HOST }}"
+          ssh "$REMOTE" "mkdir -p /opt/jibbr-ms-be/scripts /opt/jibbr-ms-be/services/call-service"
           printf '%s' '${{ secrets.STAGING_CALL_SERVICE_ENV }}' > /tmp/call-service.env
-          scp /tmp/call-service.env "${{ secrets.STAGING_CALL_DROPLET_USER }}@${{ secrets.STAGING_CALL_DROPLET_HOST }}:/opt/jibbr-ms-be/services/call-service/.env"
+          scp /tmp/call-service.env "$REMOTE:/opt/jibbr-ms-be/services/call-service/.env"
+
+      - name: Sync deploy scripts to droplet
+        run: |
+          REMOTE="${{ secrets.STAGING_CALL_DROPLET_USER }}@${{ secrets.STAGING_CALL_DROPLET_HOST }}"
+          scp scripts/deploy-call-service-remote.sh "$REMOTE:/opt/jibbr-ms-be/scripts/"
+          scp scripts/check-call-service-health.sh "$REMOTE:/opt/jibbr-ms-be/scripts/"
+          scp docker-compose.call-image.yml "$REMOTE:/opt/jibbr-ms-be/"
+          ssh "$REMOTE" "chmod +x /opt/jibbr-ms-be/scripts/*.sh"
 
       - name: Deploy call-service over SSH
         env:
           CALL_IMAGE: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/jibbr-call-service:${{ github.sha }}
         run: |
           ssh "${{ secrets.STAGING_CALL_DROPLET_USER }}@${{ secrets.STAGING_CALL_DROPLET_HOST }}" \
-            "cd /opt/jibbr-ms-be && chmod +x scripts/deploy-call-service-remote.sh && CALL_IMAGE='${CALL_IMAGE}' ./scripts/deploy-call-service-remote.sh"
+            "cd /opt/jibbr-ms-be && CALL_IMAGE='${CALL_IMAGE}' ./scripts/deploy-call-service-remote.sh"
 
   deploy-call-production:
     name: Deploy Production Call Service
@@ -425,17 +435,27 @@ jobs:
       - name: Add droplet host key
         run: ssh-keyscan -H "${{ secrets.PRODUCTION_CALL_DROPLET_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Write remote env file
+      - name: Prepare remote dirs and env file
         run: |
+          REMOTE="${{ secrets.PRODUCTION_CALL_DROPLET_USER }}@${{ secrets.PRODUCTION_CALL_DROPLET_HOST }}"
+          ssh "$REMOTE" "mkdir -p /opt/jibbr-ms-be/scripts /opt/jibbr-ms-be/services/call-service"
           printf '%s' '${{ secrets.PRODUCTION_CALL_SERVICE_ENV }}' > /tmp/call-service.env
-          scp /tmp/call-service.env "${{ secrets.PRODUCTION_CALL_DROPLET_USER }}@${{ secrets.PRODUCTION_CALL_DROPLET_HOST }}:/opt/jibbr-ms-be/services/call-service/.env"
+          scp /tmp/call-service.env "$REMOTE:/opt/jibbr-ms-be/services/call-service/.env"
+
+      - name: Sync deploy scripts to droplet
+        run: |
+          REMOTE="${{ secrets.PRODUCTION_CALL_DROPLET_USER }}@${{ secrets.PRODUCTION_CALL_DROPLET_HOST }}"
+          scp scripts/deploy-call-service-remote.sh "$REMOTE:/opt/jibbr-ms-be/scripts/"
+          scp scripts/check-call-service-health.sh "$REMOTE:/opt/jibbr-ms-be/scripts/"
+          scp docker-compose.call-image.yml "$REMOTE:/opt/jibbr-ms-be/"
+          ssh "$REMOTE" "chmod +x /opt/jibbr-ms-be/scripts/*.sh"
 
       - name: Deploy call-service over SSH
         env:
           CALL_IMAGE: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/jibbr-call-service:${{ github.sha }}
         run: |
           ssh "${{ secrets.PRODUCTION_CALL_DROPLET_USER }}@${{ secrets.PRODUCTION_CALL_DROPLET_HOST }}" \
-            "cd /opt/jibbr-ms-be && chmod +x scripts/deploy-call-service-remote.sh && CALL_IMAGE='${CALL_IMAGE}' ./scripts/deploy-call-service-remote.sh"
+            "cd /opt/jibbr-ms-be && CALL_IMAGE='${CALL_IMAGE}' ./scripts/deploy-call-service-remote.sh"
 
   smoke-staging:
     name: Smoke Test — Staging

@@ -3,7 +3,16 @@
   "ui": "stream",
   "concurrency": "15",
   "globalDependencies": [".env"],
-  "globalEnv": ["NODE_ENV", "JWT_SECRET", "RATE_LIMIT_MAX", "RATE_LIMIT_WINDOW_MS"],
+  "globalEnv": [
+    "NODE_ENV",
+    "JWT_SECRET",
+    "RATE_LIMIT_MAX",
+    "RATE_LIMIT_WINDOW_MS",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "INTERNAL_SERVICE_SECRET",
+    "ALLOWED_ORIGINS"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -20,15 +29,18 @@
     },
     "test": {
       "dependsOn": ["build"],
-      "outputs": []
+      "outputs": [],
+      "env": ["DATABASE_URL", "REDIS_URL", "JWT_SECRET", "NODE_ENV", "INTERNAL_SERVICE_SECRET"]
     },
     "test:e2e": {
       "dependsOn": ["build"],
-      "outputs": []
+      "outputs": [],
+      "env": ["DATABASE_URL", "REDIS_URL", "JWT_SECRET", "NODE_ENV", "INTERNAL_SERVICE_SECRET"]
     },
     "test:unit": {
       "dependsOn": ["build"],
-      "outputs": []
+      "outputs": [],
+      "env": ["DATABASE_URL", "REDIS_URL", "JWT_SECRET", "NODE_ENV", "INTERNAL_SERVICE_SECRET"]
     },
     "lint": {
       "outputs": []
