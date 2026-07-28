@@ -41,8 +41,7 @@
     "turbo": "^2.0.0"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=7.0.0"
+    "node": "22.x"
   },
   "dependencies": {
     "compression": "^1.8.1"
