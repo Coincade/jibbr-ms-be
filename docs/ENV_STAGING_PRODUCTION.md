@@ -1,0 +1,62 @@
+# Staging / production environment files
+
+## Layout
+
+| Path | Purpose |
+|------|---------|
+| `.env` | Local development only |
+| `.env.staging` / `.env.production` | Filled secrets (gitignored) |
+| `.env.staging.example` / `.env.production.example` | Templates (committed) |
+| `services/*/.env.staging(.example)` | Per-service App Platform / droplet config |
+| `services/call-service/.env.*` | Droplet only (not App Platform) |
+
+## Shared secrets within one environment
+
+These must be **identical** across auth, upload, messaging, socket, and call **for that environment**:
+
+- `JWT_SECRET`
+- `DATABASE_URL` (Neon for that env)
+- `INTERNAL_SERVICE_SECRET` (call + socket only)
+- Prefer the same Redis instance (or clearly separate staging vs prod)
+
+Staging values must **not** equal production values.
+
+## How to fill
+
+```bash
+# Root checklist for GitHub Environments
+cp .env.staging.example .env.staging
+cp .env.production.example .env.production
+
+# Each service
+cp services/auth-service/.env.staging.example services/auth-service/.env.staging
+# …repeat for upload, messaging, socket, call
+
+# Replace every REPLACE_ME_* with real values from Neon / DO / 1Password
+```
+
+On DigitalOcean App Platform, paste the staging or production file contents into that app’s Environment Variables (don’t rely on the file in the image).
+
+On the call droplet:
+
+```bash
+# staging box
+cp services/call-service/.env.staging /opt/jibbr-ms-be/services/call-service/.env
+
+# production box
+cp services/call-service/.env.production /opt/jibbr-ms-be/services/call-service/.env
+```
+
+## Public URLs (already filled in templates)
+
+| Service | Staging | Production |
+|---------|---------|------------|
+| Auth | `jibbr-dev-auth-6ib5s` | `jibbr-prod-auth-ircsh` |
+| Upload | `jibbr-dev-upload-6yets` | `jibbr-prod-fileupload-nbvgv` |
+| Messaging | `jibbr-dev-messaging-jgk48` | `jibbr-prod-messaging-cv5ss` |
+| Socket | `jibbr-dev-socket-emtnf` | `jibbr-prod-socket-rq392` |
+| Call | `https://call.jibbr.in` (or staging droplet IP) | separate prod droplet / domain |
+
+## Electron
+
+Use `jibbr-electron-fe/.env.staging` and `.env.production` so `VITE_*` URLs match the table above. Never point a staging Electron build at `jibbr-prod-*`.

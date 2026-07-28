@@ -35,6 +35,24 @@ status="$(printf '%s' "$response" | node -e "
 
 echo "$response"
 
+printf '%s' "$response" | node -e "
+  let data = '';
+  process.stdin.on('data', (c) => (data += c));
+  process.stdin.on('end', () => {
+    try {
+      const j = JSON.parse(data);
+      const warnings = Array.isArray(j.warnings) ? j.warnings : [];
+      for (const w of warnings) console.error('warning:', w);
+      if (j.turnConfigured === false) {
+        console.error('hint: set TURN_URL / TURN_USERNAME / TURN_CREDENTIAL for production NAT traversal');
+      }
+      if (j.announcedIpConfigured === false) {
+        console.error('hint: set MEDIASOUP_ANNOUNCED_IP to this host public IP');
+      }
+    } catch { /* ignore */ }
+  });
+"
+
 case "$status" in
   healthy) exit 0 ;;
   degraded) echo "warning: call-service is degraded" >&2; exit 0 ;;

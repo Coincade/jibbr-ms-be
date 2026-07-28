@@ -10,12 +10,14 @@ build/
 out/
 *.tsbuildinfo
 
-# Environment variables
-.env
+# Environment variables (never commit real secrets)
+.env*
 .env.local
+.env.staging*
+.env.production*
 .env.*.local
-.env.production
-.env.example
+.env.*.example
+
 
 # Logs
 logs/

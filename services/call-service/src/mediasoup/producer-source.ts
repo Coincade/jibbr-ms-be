@@ -1,4 +1,4 @@
-import type { Producer } from 'mediasoup/node/lib/types.js';
+import type { Producer } from 'mediasoup/types';
 
 export type ProducerSource = 'camera' | 'screen';
 

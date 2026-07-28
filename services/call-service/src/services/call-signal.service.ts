@@ -2,6 +2,27 @@ import { conversationIdFromRoom, isConversationRoom } from '../utils/room-id.js'
 
 type CallSignalPayload = Record<string, unknown>;
 
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 200;
+
+type SignalMetrics = {
+  attempts: number;
+  successes: number;
+  failures: number;
+  skippedNoConfig: number;
+};
+
+const metrics: SignalMetrics = {
+  attempts: 0,
+  successes: 0,
+  failures: 0,
+  skippedNoConfig: 0,
+};
+
+let missingConfigWarned = false;
+
+export const getCallSignalMetrics = (): SignalMetrics => ({ ...metrics });
+
 const getInternalSocketUrl = (): string | undefined => {
   const raw =
     process.env.SOCKET_SERVICE_INTERNAL_URL ||
@@ -13,42 +34,96 @@ const getInternalSocketUrl = (): string | undefined => {
 const getInternalSecret = (): string | undefined =>
   process.env.INTERNAL_SERVICE_SECRET?.trim() || undefined;
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const requireConfig = (): { baseUrl: string; secret: string } | null => {
+  const baseUrl = getInternalSocketUrl();
+  const secret = getInternalSecret();
+  if (!baseUrl || !secret) {
+    metrics.skippedNoConfig += 1;
+    if (!missingConfigWarned) {
+      missingConfigWarned = true;
+      console.error(
+        '[call-signal] INTERNAL_SERVICE_SECRET or SOCKET_SERVICE_INTERNAL_URL unset — huddle presence/producer signals will be dropped'
+      );
+    }
+    return null;
+  }
+  return { baseUrl, secret };
+};
+
+const postWithRetry = async (
+  path: string,
+  body: Record<string, unknown>,
+  label: string
+): Promise<boolean> => {
+  const config = requireConfig();
+  if (!config) return false;
+
+  metrics.attempts += 1;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(`${config.baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Secret': config.secret,
+        },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        metrics.successes += 1;
+        return true;
+      }
+      const text = await res.text().catch(() => '');
+      lastError = new Error(`HTTP ${res.status}: ${text}`);
+      console.warn(
+        `[call-signal] ${label} failed (attempt ${attempt}/${MAX_RETRIES}):`,
+        res.status,
+        text
+      );
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[call-signal] ${label} error (attempt ${attempt}/${MAX_RETRIES}):`,
+        error
+      );
+    }
+
+    if (attempt < MAX_RETRIES) {
+      await sleep(RETRY_BASE_MS * 2 ** (attempt - 1));
+    }
+  }
+
+  metrics.failures += 1;
+  console.error(`[call-signal] ${label} exhausted retries:`, lastError);
+  return false;
+};
+
 /**
  * Notify socket-service to broadcast a huddle event to channel or conversation room.
- * No-op when INTERNAL_SERVICE_SECRET or URL is unset (dev without socket HTTP).
+ * Retries with exponential backoff; logs loudly when config is missing.
  */
 export const emitCallRoomSignal = async (
   roomId: string,
   event: string,
   data: CallSignalPayload
 ): Promise<void> => {
-  const baseUrl = getInternalSocketUrl();
-  const secret = getInternalSecret();
-  if (!baseUrl || !secret) return;
-
   const conversationId = conversationIdFromRoom(roomId);
   const channelId = conversationId ? undefined : roomId;
 
-  try {
-    const res = await fetch(`${baseUrl}/internal/call/broadcast`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Internal-Secret': secret,
-      },
-      body: JSON.stringify({
-        channelId,
-        conversationId: conversationId ?? undefined,
-        event,
-        data,
-      }),
-    });
-    if (!res.ok) {
-      console.warn('[call-signal] broadcast failed:', res.status, await res.text());
-    }
-  } catch (error) {
-    console.warn('[call-signal] broadcast error:', error);
-  }
+  await postWithRetry(
+    '/internal/call/broadcast',
+    {
+      channelId,
+      conversationId: conversationId ?? undefined,
+      event,
+      data,
+    },
+    `broadcast ${event}`
+  );
 };
 
 export const emitWorkspaceHuddleUpdate = async (
@@ -71,29 +146,15 @@ export const emitWorkspaceHuddleUpdate = async (
     return;
   }
 
-  const baseUrl = getInternalSocketUrl();
-  const secret = getInternalSecret();
-  if (!baseUrl || !secret) return;
-
-  try {
-    const res = await fetch(`${baseUrl}/internal/call/broadcast-workspace`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Internal-Secret': secret,
-      },
-      body: JSON.stringify({
-        workspaceId,
-        event: 'workspace_huddle_updated',
-        data: { workspaceId, ...data },
-      }),
-    });
-    if (!res.ok) {
-      console.warn('[call-signal] workspace broadcast failed:', res.status, await res.text());
-    }
-  } catch (error) {
-    console.warn('[call-signal] workspace broadcast error:', error);
-  }
+  await postWithRetry(
+    '/internal/call/broadcast-workspace',
+    {
+      workspaceId,
+      event: 'workspace_huddle_updated',
+      data: { workspaceId, ...data },
+    },
+    'broadcast-workspace'
+  );
 };
 
 export const emitChatMessage = async (
@@ -103,29 +164,15 @@ export const emitChatMessage = async (
   const conversationId = conversationIdFromRoom(roomId);
   const channelId = conversationId ? undefined : roomId;
 
-  const baseUrl = getInternalSocketUrl();
-  const secret = getInternalSecret();
-  if (!baseUrl || !secret) return;
-
-  try {
-    const res = await fetch(`${baseUrl}/internal/call/broadcast-message`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Internal-Secret': secret,
-      },
-      body: JSON.stringify({
-        channelId,
-        conversationId: conversationId ?? undefined,
-        message,
-      }),
-    });
-    if (!res.ok) {
-      console.warn('[call-signal] message broadcast failed:', res.status, await res.text());
-    }
-  } catch (error) {
-    console.warn('[call-signal] message broadcast error:', error);
-  }
+  await postWithRetry(
+    '/internal/call/broadcast-message',
+    {
+      channelId,
+      conversationId: conversationId ?? undefined,
+      message,
+    },
+    'broadcast-message'
+  );
 };
 
 export const emitProducerClosed = async (

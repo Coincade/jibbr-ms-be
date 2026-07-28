@@ -1,4 +1,4 @@
-import type { RtpCodecCapability, WorkerLogLevel, WorkerLogTag } from 'mediasoup/node/lib/types.js';
+import type { RtpCodecCapability, WorkerLogLevel, WorkerLogTag } from 'mediasoup/types';
 
 export const mediaCodecs: RtpCodecCapability[] = [
   {
@@ -14,6 +14,19 @@ export const mediaCodecs: RtpCodecCapability[] = [
     preferredPayloadType: 96,
     clockRate: 90000,
     parameters: {
+      'x-google-start-bitrate': 1000,
+    },
+  },
+  // H.264 Constrained Baseline — preferred by many mobile hardware decoders.
+  {
+    kind: 'video',
+    mimeType: 'video/H264',
+    preferredPayloadType: 97,
+    clockRate: 90000,
+    parameters: {
+      'packetization-mode': 1,
+      'profile-level-id': '42e01f',
+      'level-asymmetry-allowed': 1,
       'x-google-start-bitrate': 1000,
     },
   },

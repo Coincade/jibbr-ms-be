@@ -4,8 +4,8 @@ import type {
   Producer,
   Router,
   WebRtcTransport,
-} from 'mediasoup/node/lib/types.js';
-import { getNextWorker, setOnWorkerDied } from './workers.js';
+} from 'mediasoup/types';
+import { getNextWorker, setOnWorkerDied, trackRoomOnWorker, untrackRoomOnWorker } from './workers.js';
 import { mediaCodecs } from '../config/mediasoup.js';
 import { persistRoom, deletePersistedRoom, getPersistedRoom } from './rooms-redis.js';
 import { endHuddleSessionRecord } from '../services/huddle-session.service.js';
@@ -99,6 +99,7 @@ export const getOrCreateRoom = async (
   };
 
   rooms.set(roomId, room);
+  trackRoomOnWorker(room.workerPid);
   void persistRoom(snapshotForRedis(room));
   return room;
 };
@@ -217,6 +218,7 @@ const closeRoom = async (roomId: string): Promise<void> => {
 
   room.router.close();
   rooms.delete(roomId);
+  untrackRoomOnWorker(room.workerPid);
   void deletePersistedRoom(roomId);
 };
 

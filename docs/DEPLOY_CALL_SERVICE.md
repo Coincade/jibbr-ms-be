@@ -55,8 +55,10 @@ Edit `services/call-service/.env` (see `.env.example`):
 - [ ] `MEDIASOUP_LISTEN_IP=0.0.0.0`
 - [ ] `MEDIASOUP_ANNOUNCED_IP=<DROPLET_PUBLIC_IPV4>` (not private IP)
 - [ ] `MEDIASOUP_RTC_MIN_PORT=40000` / `MAX=49999`
+- [ ] Optional: `MEDIASOUP_NUM_WORKERS` — defaults to `min(4, cpus-1)` with least-loaded room assignment (single-node only; multi-droplet SFU not supported yet)
 - [ ] `ALLOWED_ORIGINS` — staging/prod DO app URLs + `http://localhost:5173`
-- [ ] Optional: `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` (no quotes on credential)
+- [ ] **Recommended for prod:** `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` (no quotes on credential)
+- [ ] Optional: `CALL_REQUIRE_NAT_CONFIG=1` — marks `/health` as `degraded` when TURN or announced IP is missing
 - [ ] **Producer lifecycle (Phase C+):** same `INTERNAL_SERVICE_SECRET` on **call-service** and **socket-service**; `SOCKET_SERVICE_INTERNAL_URL` on call-service → socket HTTP (e.g. `https://<socket-app-url>` or `http://localhost:3004` locally). Startup log should show `ICE: STUN + TURN` or `STUN only` warning.
 - [ ] **Huddles product (Phase D):** workspace fan-out + huddle-ended chat messages use the same internal secret. See [HUDDLES.md](./HUDDLES.md).
 
@@ -201,5 +203,7 @@ docker compose -f docker-compose.call-image.yml up -d --force-recreate
 
 ## Health & TURN
 
-- `GET /health` → `{ status, activeRooms, mediasoupWorkers, uptime }`
+- `GET /health` → `{ status, activeRooms, mediasoupWorkers, uptime, turnConfigured, announcedIpConfigured, warnings }`
+- `/health.warnings` lists missing TURN / announced IP without forcing unhealthy (unless `CALL_REQUIRE_NAT_CONFIG=1`)
 - TURN: ExpressTURN or coturn; no quotes around `TURN_CREDENTIAL`
+- Clients toast when join reports `turnConfigured: false`

@@ -28,10 +28,11 @@ Prerequisites:
 | # | Steps | Expected |
 |---|--------|----------|
 | 2.1 | A and B in huddle with audio | Baseline OK |
-| 2.2 | B: brief network blip (airplane mode 3–8s) | “Reconnecting to huddle… (1/3)” toast; audio resumes without manual rejoin |
-| 2.3 | B: three consecutive failures (airplane >30s) | “Could not reconnect — please rejoin the huddle”; leave + rejoin works |
+| 2.2 | B: brief network blip (airplane mode ~1–2s) | Toast “Connection interrupted…”; if ICE recovers within ~2.5s, returns to connected **without** tearing down transports |
+| 2.3 | B: longer blip (airplane mode 3–8s) | After ~2.5s grace on ICE `disconnected` (or immediately on `failed`): “Reconnecting… (1/3)”; audio resumes without manual rejoin |
+| 2.4 | B: three consecutive failures (airplane >30s) | “Could not reconnect — please rejoin”; leave + rejoin works |
 
-**Pass criteria:** Up to 3 automatic transport reconnect attempts with exponential backoff (1s → 2s → 4s, cap 8s).
+**Pass criteria:** ICE `disconnected` waits ~2.5s before rebuild; ICE `failed` reconnects immediately. Up to 3 automatic transport reconnect attempts with exponential backoff (1s → 2s → 4s, cap 8s).
 
 ---
 
@@ -49,8 +50,8 @@ Prerequisites:
 
 | # | Steps | Expected |
 |---|--------|----------|
-| 4.1 | A starts huddle; deny mic permission on join | A sees error toast; B does **not** see phantom live huddle |
-| 4.2 | A starts huddle in `#general`; B on `#random` | B gets incoming ring/banner (workspace fan-out) |
+| 4.1 | A starts huddle; deny mic permission on join | A sees error toast; B does **not** see phantom live huddle (socket `*_call_start` only after mediasoup join) |
+| 4.2 | A starts huddle in `#general`; B on `#random` | B gets incoming ring/banner (workspace fan-out) after A’s join succeeds |
 
 ---
 
@@ -60,8 +61,8 @@ Prerequisites:
 |---|--------|----------|
 | 5.1 | In huddle 15s+ | call-service logs JSON lines with `"message":"huddle.stats"` every ~5s per user |
 | 5.2 | Simulate poor network (Chrome devtools throttle) | `"message":"huddle.stats.degraded"` at most once per 30s per user+room |
-| 5.3 | `curl http://localhost:3005/health` | JSON with `status`, `activeRooms`, `mediasoupWorkers.running`, `redis`, `turnConfigured` |
-| 5.4 | `./scripts/check-call-service-health.sh` | Exit 0 when healthy/degraded; exit 1 when unhealthy |
+| 5.3 | `curl http://localhost:3005/health` | JSON with `status`, `activeRooms`, `mediasoupWorkers.running`, `redis`, `turnConfigured`, `announcedIpConfigured`, `warnings` |
+| 5.4 | `./scripts/check-call-service-health.sh` | Exit 0 when healthy/degraded; exit 1 when unhealthy; prints TURN/announced-IP hints when missing |
 | 5.5 | Stop all mediasoup workers (kill process) | `/health` returns HTTP 503, `"status":"unhealthy"` if rooms were active |
 
 ### Example stats log line
@@ -95,6 +96,10 @@ Prerequisites:
   "redis": { "configured": true, "connected": true },
   "turnConfigured": false,
   "announcedIpConfigured": false,
+  "warnings": [
+    "TURN is not configured (set TURN_URL, TURN_USERNAME, TURN_CREDENTIAL). Strict NAT clients may fail.",
+    "MEDIASOUP_ANNOUNCED_IP is not set. Clients outside this host may not receive media."
+  ],
   "timestamp": "2026-06-08T12:00:00.000Z"
 }
 ```
