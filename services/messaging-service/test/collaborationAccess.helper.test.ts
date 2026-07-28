@@ -64,4 +64,30 @@ describe('helpers/collaborationAccess', () => {
 
     await expect(canUserReadConversationHistory('cv1', 'u1')).resolves.toBe(true);
   });
+
+  it('canAccessWorkspaceResource falls back to active collaboration groups', async () => {
+    prisma.member.findFirst.mockResolvedValueOnce(null);
+    prisma.member.findMany.mockResolvedValue([{ workspaceId: 'w-user' }]);
+    prisma.workspaceCollaboration.findMany.mockResolvedValue([]);
+    prisma.collaborationGroup.findMany.mockResolvedValue([
+      {
+        policy: {
+          allowExternalDiscovery: true,
+          allowCrossWorkspaceDm: false,
+          allowSharedChannels: false,
+        },
+      },
+    ]);
+
+    await expect(canAccessWorkspaceResource('u1', 'w-target', 'workspace')).resolves.toBe(true);
+  });
+
+  it('canUserReadConversationHistory denies access when the fallback workspace membership is gone', async () => {
+    prisma.conversationParticipant.findFirst.mockResolvedValue({ id: 'p1' });
+    prisma.conversation.findUnique.mockResolvedValue({ workspaceId: 'w1', collaborationId: 'c1', groupId: null });
+    isCollaborationDmMutationAllowedDb.mockResolvedValue(false);
+    prisma.member.findFirst.mockResolvedValue(null);
+
+    await expect(canUserReadConversationHistory('cv1', 'u1')).resolves.toBe(false);
+  });
 });

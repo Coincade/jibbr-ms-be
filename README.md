@@ -80,4 +80,6 @@ Each service has its own `.env` file with service-specific variables. See `ENV_V
 - `SETUP.md` - Detailed setup and architecture guide
 - `ENV_VARIABLES.md` - Environment variables documentation
 - `MIGRATION_GUIDE.md` - Migration guide for existing projects
+- `docs/ENV_STAGING_PRODUCTION.md` - staging / production env layout and secret mapping
+- `docs/CI_CD.md` - CI/CD workflow, required GitHub secrets, and rollback
 

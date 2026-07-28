@@ -519,5 +519,17 @@ const shutdown = async () => {
   }
 };
 
+export const __streamsTestUtils = {
+  parseStreamEvent,
+  shouldProcessEvent,
+  processStreamMessage,
+  claimStaleMessages,
+  resetState() {
+    ioInstance = null;
+    streamClientPromise = null;
+    isRunning = false;
+  },
+};
+
 process.on('SIGTERM', () => shutdown().catch(() => undefined));
 process.on('SIGINT', () => shutdown().catch(() => undefined));

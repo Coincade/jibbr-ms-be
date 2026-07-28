@@ -1,6 +1,6 @@
 # Call-service deployment notes (mediasoup on DigitalOcean Droplet)
 
-Use this as a runbook for staging/production. Build the image on your Mac; run it on a Droplet with **host networking** (required for UDP).
+Use this as a runbook for staging/production. Build the image on your Mac or in GitHub Actions; run it on a Droplet with **host networking** (required for UDP).
 
 ---
 
@@ -120,6 +120,24 @@ docker compose -f docker-compose.call-image.yml logs --tail=30 call-service
 curl -s http://localhost:3005/health
 ```
 
+## Deploy from GitHub Actions
+
+The repo CD workflow can deploy `call-service` automatically:
+
+1. Build/push `docker.io/<namespace>/jibbr-call-service:${sha}`
+2. Copy `STAGING_CALL_SERVICE_ENV` or `PRODUCTION_CALL_SERVICE_ENV` to `/opt/jibbr-ms-be/services/call-service/.env`
+3. SSH to the droplet
+4. Run `scripts/deploy-call-service-remote.sh`
+5. Verify `/health`
+
+Required GitHub Environment secrets:
+
+- `*_CALL_DROPLET_HOST`
+- `*_CALL_DROPLET_USER`
+- `*_CALL_DROPLET_SSH_KEY`
+- `*_CALL_SERVICE_ENV`
+- `*_CALL_URL`
+
 **Success signals in logs:**
 
 - `[mediasoup] 1 worker(s) started`
@@ -197,7 +215,6 @@ docker compose -f docker-compose.call-image.yml up -d --force-recreate
 - HTTPS reverse proxy (Caddy/nginx) for call REST
 - Fix Prisma OpenSSL warning in Dockerfile (cosmetic if health is OK)
 - `kernel5` mediasoup worker tarball only if droplet kernel is 5.x (`uname -r`)
-- GitHub Actions on `ubuntu-latest` to build/push instead of Mac
 
 ---
 

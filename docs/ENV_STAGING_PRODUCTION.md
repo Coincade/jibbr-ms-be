@@ -57,6 +57,52 @@ cp services/call-service/.env.production /opt/jibbr-ms-be/services/call-service/
 | Socket | `jibbr-dev-socket-emtnf` | `jibbr-prod-socket-rq392` |
 | Call | `https://call.jibbr.in` (or staging droplet IP) | separate prod droplet / domain |
 
+## GitHub Environment secrets
+
+Use the root env files as a checklist, then paste values into GitHub Environments.
+
+### Staging
+
+- `DIGITALOCEAN_ACCESS_TOKEN`
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `DOCKERHUB_NAMESPACE`
+- `STAGING_DATABASE_URL`
+- `STAGING_DO_AUTH_APP_ID`
+- `STAGING_DO_UPLOAD_APP_ID`
+- `STAGING_DO_MESSAGING_APP_ID`
+- `STAGING_DO_SOCKET_APP_ID`
+- `STAGING_AUTH_URL`
+- `STAGING_UPLOAD_URL`
+- `STAGING_MESSAGING_URL`
+- `STAGING_SOCKET_URL`
+- `STAGING_CALL_URL`
+- `STAGING_CALL_DROPLET_HOST`
+- `STAGING_CALL_DROPLET_USER`
+- `STAGING_CALL_DROPLET_SSH_KEY`
+- `STAGING_CALL_SERVICE_ENV` (full contents of `services/call-service/.env.staging`)
+
+### Production
+
+- `DIGITALOCEAN_ACCESS_TOKEN`
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `DOCKERHUB_NAMESPACE`
+- `PRODUCTION_DATABASE_URL`
+- `PRODUCTION_DO_AUTH_APP_ID`
+- `PRODUCTION_DO_UPLOAD_APP_ID`
+- `PRODUCTION_DO_MESSAGING_APP_ID`
+- `PRODUCTION_DO_SOCKET_APP_ID`
+- `PRODUCTION_AUTH_URL`
+- `PRODUCTION_UPLOAD_URL`
+- `PRODUCTION_MESSAGING_URL`
+- `PRODUCTION_SOCKET_URL`
+- `PRODUCTION_CALL_URL`
+- `PRODUCTION_CALL_DROPLET_HOST`
+- `PRODUCTION_CALL_DROPLET_USER`
+- `PRODUCTION_CALL_DROPLET_SSH_KEY`
+- `PRODUCTION_CALL_SERVICE_ENV` (full contents of `services/call-service/.env.production`)
+
 ## Electron
 
 Use `jibbr-electron-fe/.env.staging` and `.env.production` so `VITE_*` URLs match the table above. Never point a staging Electron build at `jibbr-prod-*`.
