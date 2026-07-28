@@ -66,7 +66,6 @@ jobs:
     name: Build & Push App Image — ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: changes
-    if: ${{ matrix.changed == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -81,18 +80,22 @@ jobs:
             changed: ${{ needs.changes.outputs.socket }}
     steps:
       - uses: actions/checkout@v4
+        if: ${{ matrix.changed == 'true' }}
 
       - name: Log in to Docker Hub
+        if: ${{ matrix.changed == 'true' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set image tag
+        if: ${{ matrix.changed == 'true' }}
         id: tag
         run: echo "IMAGE=${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.service }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Build Docker image
+        if: ${{ matrix.changed == 'true' }}
         env:
           DOCKER_BUILDKIT: "1"
         run: |
@@ -105,6 +108,7 @@ jobs:
             .
 
       - name: Push Docker image
+        if: ${{ matrix.changed == 'true' }}
         run: |
           docker push "${{ steps.tag.outputs.IMAGE }}"
           docker push "${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.service }}:latest"
@@ -203,7 +207,7 @@ jobs:
     name: Deploy Staging App — ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: [changes, migrate-staging]
-    if: ${{ github.ref_name == 'dev' && matrix.changed == 'true' }}
+    if: ${{ github.ref_name == 'dev' }}
     environment: staging
     strategy:
       fail-fast: false
@@ -223,11 +227,13 @@ jobs:
             app_id_secret: STAGING_DO_SOCKET_APP_ID
     steps:
       - name: Install doctl
+        if: ${{ matrix.changed == 'true' }}
         uses: digitalocean/action-doctl@v2
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
       - name: Update App Platform image tag
+        if: ${{ matrix.changed == 'true' }}
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
           TMP_SPEC="$(mktemp)"
@@ -251,6 +257,7 @@ jobs:
           doctl apps update "$APP_ID" --spec "$TMP_SPEC"
 
       - name: Trigger deployment
+        if: ${{ matrix.changed == 'true' }}
         id: deploy_trigger
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
@@ -262,6 +269,7 @@ jobs:
           echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployment to go live
+        if: ${{ matrix.changed == 'true' }}
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
           DEPLOYMENT_ID="${{ steps.deploy_trigger.outputs.DEPLOYMENT_ID }}"
@@ -286,7 +294,7 @@ jobs:
     name: Deploy Production App — ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: [changes, migrate-production]
-    if: ${{ github.ref_name == 'main' && matrix.changed == 'true' }}
+    if: ${{ github.ref_name == 'main' }}
     environment: production
     strategy:
       fail-fast: false
@@ -306,11 +314,13 @@ jobs:
             app_id_secret: PRODUCTION_DO_SOCKET_APP_ID
     steps:
       - name: Install doctl
+        if: ${{ matrix.changed == 'true' }}
         uses: digitalocean/action-doctl@v2
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
       - name: Update App Platform image tag
+        if: ${{ matrix.changed == 'true' }}
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
           TMP_SPEC="$(mktemp)"
@@ -334,6 +344,7 @@ jobs:
           doctl apps update "$APP_ID" --spec "$TMP_SPEC"
 
       - name: Trigger deployment
+        if: ${{ matrix.changed == 'true' }}
         id: deploy_trigger
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
@@ -345,6 +356,7 @@ jobs:
           echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployment to go live
+        if: ${{ matrix.changed == 'true' }}
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
           DEPLOYMENT_ID="${{ steps.deploy_trigger.outputs.DEPLOYMENT_ID }}"

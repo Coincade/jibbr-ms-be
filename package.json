@@ -39,6 +39,8 @@
   "author": "Yash KVR",
   "license": "ISC",
   "devDependencies": {
+    "globals": "^16.4.0",
+    "typescript-eslint": "^8.41.0",
     "artillery": "^2.0.0",
     "turbo": "^2.0.0"
   },
