@@ -1,7 +1,12 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "module": "Node16",
-    "moduleResolution": "node16"
-  }
+    "module": "ES2022",
+    "moduleResolution": "node",
+    "isolatedModules": true,
+    "types": ["node", "jest"],
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

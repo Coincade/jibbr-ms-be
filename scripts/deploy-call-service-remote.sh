@@ -27,12 +27,26 @@ docker pull "$CALL_IMAGE"
 export CALL_IMAGE
 docker compose -f "$COMPOSE_FILE" up -d --force-recreate
 
+echo "Container status:"
+docker compose -f "$COMPOSE_FILE" ps || true
 docker compose -f "$COMPOSE_FILE" logs --tail=40 call-service || true
 
+# Health is checked on the droplet loopback (host networking). Do not use the
+# public staging URL here — this process is already SSH'd onto that host.
 if [ -x "./scripts/check-call-service-health.sh" ]; then
-  ./scripts/check-call-service-health.sh
+  if ! CALL_HEALTH_ATTEMPTS="${CALL_HEALTH_ATTEMPTS:-30}" \
+    CALL_HEALTH_SLEEP_SECS="${CALL_HEALTH_SLEEP_SECS:-2}" \
+    CALL_SERVICE_URL="${CALL_SERVICE_URL:-http://127.0.0.1:3005}" \
+    ./scripts/check-call-service-health.sh; then
+    echo "----- call-service logs (tail) -----" >&2
+    docker compose -f "$COMPOSE_FILE" logs --tail=120 call-service || true
+    echo "----- container inspect -----" >&2
+    docker ps -a --filter name=jibbr-call-service --no-trunc || true
+    exit 1
+  fi
 else
-  curl -fsS --max-time 10 "http://127.0.0.1:3005/health" >/dev/null
+  curl -fsS --retry 30 --retry-delay 2 --retry-connrefused --max-time 5 \
+    "http://127.0.0.1:3005/health" >/dev/null
 fi
 
 echo "call-service deploy complete"

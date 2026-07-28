@@ -5,6 +5,7 @@ import path from 'path';
 import { createServer } from 'http';
 import { Logger } from '@jibbr/logger';
 import { createSocketApp } from './app.js';
+import internalCallRoutes from './routes/internal-call.route.js';
 import presenceRoutes from './routes/presence.route.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -19,7 +20,7 @@ if (result.error) {
   console.log('✅ .env loaded successfully');
 }
 
-const app = createSocketApp();
+const app = createSocketApp({ internalRouter: internalCallRoutes });
 const httpServer = createServer(app);
 const logger = new Logger('socket-service');
 

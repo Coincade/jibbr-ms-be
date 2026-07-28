@@ -1,8 +1,8 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
-import { execFileSync, spawnSync } from 'child_process';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const scriptPath = join(
@@ -72,5 +72,36 @@ describe('check-call-service-health.sh', () => {
 
     expect(invalid.status).toBe(1);
     expect(invalid.stderr).toContain('unexpected health status: invalid');
+  });
+
+  it('retries until a response is available', () => {
+    const stateFile = join(tmpdir(), `fake-curl-attempts-${Date.now()}`);
+    const curlDir = makeFakeCurlDir(`
+      state_file="\$FAKE_CURL_STATE"
+      n=0
+      if [ -f "\$state_file" ]; then
+        n="\$(cat "\$state_file")"
+      fi
+      n=\$((n + 1))
+      echo "\$n" > "\$state_file"
+      if [ "\$n" -lt 3 ]; then
+        exit 7
+      fi
+      printf '%s' '{"status":"healthy","warnings":[]}'
+    `);
+
+    expect(() =>
+      execFileSync('bash', [scriptPath], {
+        env: {
+          ...process.env,
+          PATH: `${curlDir}:${process.env.PATH}`,
+          CALL_SERVICE_URL: 'http://fake',
+          CALL_HEALTH_ATTEMPTS: '5',
+          CALL_HEALTH_SLEEP_SECS: '0',
+          FAKE_CURL_STATE: stateFile,
+        },
+        encoding: 'utf8',
+      })
+    ).not.toThrow();
   });
 });

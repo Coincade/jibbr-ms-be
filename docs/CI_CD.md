@@ -87,6 +87,7 @@ Required secrets:
 3. SSHing to the droplet
 4. running [`scripts/deploy-call-service-remote.sh`](../scripts/deploy-call-service-remote.sh)
 5. checking health via [`scripts/check-call-service-health.sh`](../scripts/check-call-service-health.sh)
+   (on-droplet `http://127.0.0.1:3005/health` with retries — this is correct with host networking; do not point this check at the public staging hostname from inside the droplet SSH session)
 
 The remote host must already contain:
 

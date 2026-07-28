@@ -1,9 +1,15 @@
-import express, { Application, Request, Response } from 'express';
+import express, { Application, Request, Response, type Router } from 'express';
 import cors from 'cors';
 import { realtimeMetrics } from './services/realtime-observability.service.js';
-import internalCallRoutes from './routes/internal-call.route.js';
 
-export const createSocketApp = (): Application => {
+export type CreateSocketAppOptions = {
+  /** Mounted at `/internal`. Omit in light health/e2e tests to avoid loading websocket/Prisma. */
+  internalRouter?: Router;
+};
+
+export const createSocketApp = (
+  options: CreateSocketAppOptions = {}
+): Application => {
   const app: Application = express();
 
   app.use(
@@ -25,7 +31,9 @@ export const createSocketApp = (): Application => {
     });
   });
 
-  app.use('/internal', internalCallRoutes);
+  if (options.internalRouter) {
+    app.use('/internal', options.internalRouter);
+  }
 
   app.get('/health/realtime', (_req: Request, res: Response) => {
     res.json({
