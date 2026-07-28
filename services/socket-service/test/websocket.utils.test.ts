@@ -27,6 +27,7 @@ import {
   addClientToChannel,
   authenticateSocket,
   removeClientFromAllChannels,
+  removeClientFromChannel,
   validateChannelMembership,
 } from '../src/websocket/utils.js';
 
@@ -58,6 +59,20 @@ describe('websocket utils', () => {
     expect(map.get('c1')?.has(socket)).toBe(true);
     removeClientFromAllChannels(socket, map);
     expect(leave).toHaveBeenCalledWith('c1');
+  });
+
+  it('removeClientFromChannel only leaves the requested channel', () => {
+    const join = vi.fn();
+    const leave = vi.fn();
+    const socket: any = { id: 's1', join, leave };
+    const map = new Map<string, Set<any>>();
+    addClientToChannel(socket, 'c1', map);
+    addClientToChannel(socket, 'c2', map);
+    removeClientFromChannel(socket, 'c1', map);
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(leave).toHaveBeenCalledWith('c1');
+    expect(map.get('c1')?.has(socket)).toBeFalsy();
+    expect(map.get('c2')?.has(socket)).toBe(true);
   });
 
   it('delegates validateChannelMembership to cached service', async () => {

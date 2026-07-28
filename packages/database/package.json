@@ -14,6 +14,7 @@
     "build": "prisma generate && tsc",
     "postinstall": "prisma generate",
     "dev": "tsc -w",
+    "test:unit": "vitest --run",
     "clean": "rm -rf dist",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -25,6 +26,9 @@
     "@prisma/client": "^6.2.1",
     "prisma": "^6.2.1",
     "typescript": "^5.7.3"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
+    "vitest": "^4.1.10"
   }
 }
-

@@ -6,8 +6,10 @@ import {
 } from '../services/rate-limiter.js';
 import {
   removeClientFromAllChannels,
+  removeClientFromChannel,
   addClientToChannel,
   removeClientFromAllConversations,
+  removeClientFromConversation,
   addClientToConversation,
   validateChannelMembership,
   validateConversationParticipation,
@@ -21,6 +23,10 @@ import {
   handleForwardMessage,
 } from './handlers/message.handler.js';
 import { handleAddReaction, handleRemoveReaction } from './handlers/reaction.handler.js';
+import {
+  fanoutWorkspaceHuddleFromChannel,
+  fanoutWorkspaceHuddleFromConversation,
+} from '../services/workspace-huddle-broadcast.service.js';
 import {
   handleSendDirectMessage,
   handleEditDirectMessage,
@@ -85,13 +91,19 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
 
   wss.on('close', () => clearInterval(heartbeat));
 
+  // Wire workspace huddle broadcast service to the native ws io instance
+  const { setWorkspaceHuddleIo } = await import(
+    '../services/workspace-huddle-broadcast.service.js'
+  );
+  setWorkspaceHuddleIo(io);
+
   // Streams consumer broadcasts -> same io-like API
   (async () => {
     try {
-      const { setSocketIOInstance, startStreamsConsumer } = await import(
+      const { setBroadcastIo, startStreamsConsumer } = await import(
         '../services/streams-consumer.service.js'
       );
-      setSocketIOInstance(io as any);
+      setBroadcastIo(io);
       await startStreamsConsumer();
       console.log('✅ Streams consumer initialized for WebSocket broadcasting');
     } catch (error) {
@@ -155,6 +167,7 @@ const handleConnection = (socket: SocketLike): void => {
   // Populated on join_* events after validation.
   (socket.data as any).allowedChannels = new Set<string>();
   (socket.data as any).allowedConversations = new Set<string>();
+  (socket.data as any).allowedConversations = new Set<string>();
   (socket.data as any).allowedWorkspaces = new Set<string>();
 
   // Personal room for direct messaging + notifications
@@ -198,7 +211,7 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('leave_channel', (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
-    removeClientFromAllChannels(socket, channelClients);
+    removeClientFromChannel(socket, channelId, channelClients);
     (socket.data as any).allowedChannels?.delete(channelId);
     socket.emit('left_channel', { channelId });
   });
@@ -240,7 +253,7 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('leave_conversation', (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
-    removeClientFromAllConversations(socket, conversationClients);
+    removeClientFromConversation(socket, conversationId, conversationClients);
     (socket.data as any).allowedConversations?.delete(conversationId);
     socket.emit('conversation_left', { conversationId });
   });
@@ -284,6 +297,365 @@ const handleConnection = (socket: SocketLike): void => {
       userName: user.name,
       conversationId,
     });
+  });
+
+  // Channel huddle / call presence (media via call-service + mediasoup)
+  socket.on('channel_call_start', async (data) => {
+    const { channelId } = data || {};
+    if (!channelId) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'presence'))) return;
+    const isMember = await validateChannelMembership(user.id, channelId);
+    if (!isMember) {
+      socket.emit('error', { message: 'You are not a member of this channel' });
+      return;
+    }
+    (socket.data as any).allowedChannels?.add(channelId);
+    addClientToChannel(socket, channelId, channelClients);
+    socket.to(channelId).emit('channel_call_started', {
+      channelId,
+      startedBy: user.id,
+      startedByName: user.name,
+      timestamp: new Date().toISOString(),
+    });
+    socket.emit('channel_call_started', {
+      channelId,
+      startedBy: user.id,
+      startedByName: user.name,
+      timestamp: new Date().toISOString(),
+    });
+    void fanoutWorkspaceHuddleFromChannel(channelId, {
+      active: true,
+      participantCount: 1,
+      hostUserId: user.id,
+      startedByName: user.name,
+    });
+  });
+
+  socket.on('channel_call_join', async (data) => {
+    const { channelId, sessionId } = data || {};
+    if (!channelId) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'presence'))) return;
+    const isMember = await validateChannelMembership(user.id, channelId);
+    if (!isMember) {
+      socket.emit('error', { message: 'You are not a member of this channel' });
+      return;
+    }
+    (socket.data as any).allowedChannels?.add(channelId);
+    addClientToChannel(socket, channelId, channelClients);
+    socket.to(channelId).emit('channel_call_participant_joined', {
+      channelId,
+      sessionId,
+      userId: user.id,
+      userName: user.name,
+      timestamp: new Date().toISOString(),
+    });
+    void fanoutWorkspaceHuddleFromChannel(channelId, { active: true });
+  });
+
+  socket.on('channel_call_leave', async (data) => {
+    const { channelId } = data || {};
+    if (!channelId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    socket.to(channelId).emit('channel_call_participant_left', {
+      channelId,
+      userId: user.id,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  const relayProducerClosed = (
+    scope: 'channel' | 'conversation',
+    data: {
+      channelId?: string;
+      conversationId?: string;
+      producerId?: string;
+      userId?: string;
+      kind?: string;
+      source?: string;
+    }
+  ) => {
+    if (!data.producerId) return;
+    const payload = {
+      ...data,
+      userId: data.userId ?? user.id,
+      timestamp: new Date().toISOString(),
+    };
+    if (scope === 'channel' && data.channelId) {
+      socket.to(data.channelId).emit('channel_call_producer_closed', payload);
+    }
+    if (scope === 'conversation' && data.conversationId) {
+      socket.to(data.conversationId).emit('conversation_call_producer_closed', payload);
+    }
+  };
+
+  socket.on('channel_call_producer_closed', async (data) => {
+    const { channelId } = data || {};
+    if (!channelId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    relayProducerClosed('channel', data);
+  });
+
+  socket.on('conversation_call_producer_closed', async (data) => {
+    const { conversationId } = data || {};
+    if (!conversationId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    relayProducerClosed('conversation', data);
+  });
+
+  socket.on('channel_call_producer_ready', async (data) => {
+    const { channelId, producerId, kind, sessionId, source } = data || {};
+    if (!channelId || !producerId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) {
+      const isMember = await validateChannelMembership(user.id, channelId);
+      if (!isMember) return;
+      (socket.data as any).allowedChannels?.add(channelId);
+      addClientToChannel(socket, channelId, channelClients);
+    }
+    socket.to(channelId).emit('channel_call_new_producer', {
+      channelId,
+      sessionId,
+      producerId,
+      kind,
+      source: source === 'screen' ? 'screen' : kind === 'video' ? 'camera' : undefined,
+      userId: user.id,
+      userName: user.name,
+    });
+  });
+
+  socket.on('channel_call_mute', async (data) => {
+    const { channelId, audioMuted, videoMuted } = data || {};
+    if (!channelId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    socket.to(channelId).emit('channel_call_participant_updated', {
+      channelId,
+      userId: user.id,
+      audioMuted: !!audioMuted,
+      videoMuted: !!videoMuted,
+    });
+  });
+
+  socket.on('channel_call_annotation_stroke', async (data) => {
+    const { channelId, stroke, sessionId } = data || {};
+    if (!channelId || !stroke?.id) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    socket.to(channelId).emit('channel_call_annotation_stroke', {
+      channelId,
+      sessionId,
+      stroke: {
+        ...stroke,
+        authorUserId: user.id,
+        authorName: user.name,
+      },
+    });
+  });
+
+  socket.on('channel_call_annotation_clear', async (data) => {
+    const { channelId, screenOwnerUserId, sessionId } = data || {};
+    if (!channelId || !screenOwnerUserId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    io.to(channelId).emit('channel_call_annotation_clear', {
+      channelId,
+      screenOwnerUserId,
+      sessionId,
+      clearedBy: user.id,
+    });
+  });
+
+  socket.on('channel_call_annotation_permission', async (data) => {
+    const { channelId, screenOwnerUserId, allowOthersToDraw, sessionId } = data || {};
+    if (!channelId || !screenOwnerUserId) return;
+    if (user.id !== screenOwnerUserId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    socket.to(channelId).emit('channel_call_annotation_permission', {
+      channelId,
+      screenOwnerUserId,
+      allowOthersToDraw: !!allowOthersToDraw,
+      sessionId,
+      updatedBy: user.id,
+    });
+  });
+
+  socket.on('channel_call_annotation_erase', async (data) => {
+    const { channelId, screenOwnerUserId, strokeIds, sessionId } = data || {};
+    if (!channelId || !screenOwnerUserId || !Array.isArray(strokeIds) || !strokeIds.length) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    socket.to(channelId).emit('channel_call_annotation_erase', {
+      channelId,
+      screenOwnerUserId,
+      strokeIds,
+      sessionId,
+      erasedBy: user.id,
+    });
+  });
+
+  socket.on('channel_call_end', async (data) => {
+    const { channelId } = data || {};
+    if (!channelId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    io.to(channelId).emit('channel_call_ended', {
+      channelId,
+      endedBy: user.id,
+      timestamp: new Date().toISOString(),
+    });
+    void fanoutWorkspaceHuddleFromChannel(channelId, { active: false });
+  });
+
+  // DM / conversation huddle (same mediasoup room id: conv:{conversationId})
+  socket.on('conversation_call_start', async (data) => {
+    const { conversationId } = data || {};
+    if (!conversationId) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'presence'))) return;
+    const ok = await validateConversationParticipation(user.id, conversationId);
+    if (!ok) {
+      socket.emit('error', { message: 'You are not a participant in this conversation' });
+      return;
+    }
+    (socket.data as any).allowedConversations?.add(conversationId);
+    addClientToConversation(socket, conversationId, conversationClients);
+    const payload = {
+      conversationId,
+      startedBy: user.id,
+      startedByName: user.name,
+      timestamp: new Date().toISOString(),
+    };
+    socket.to(conversationId).emit('conversation_call_started', payload);
+    socket.emit('conversation_call_started', payload);
+    void fanoutWorkspaceHuddleFromConversation(conversationId, {
+      active: true,
+      participantCount: 1,
+      hostUserId: user.id,
+      startedByName: user.name,
+    });
+  });
+
+  socket.on('conversation_call_join', async (data) => {
+    const { conversationId, sessionId } = data || {};
+    if (!conversationId) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'presence'))) return;
+    const ok = await validateConversationParticipation(user.id, conversationId);
+    if (!ok) {
+      socket.emit('error', { message: 'You are not a participant in this conversation' });
+      return;
+    }
+    (socket.data as any).allowedConversations?.add(conversationId);
+    addClientToConversation(socket, conversationId, conversationClients);
+    socket.to(conversationId).emit('conversation_call_participant_joined', {
+      conversationId,
+      sessionId,
+      userId: user.id,
+      userName: user.name,
+      timestamp: new Date().toISOString(),
+    });
+    void fanoutWorkspaceHuddleFromConversation(conversationId, { active: true });
+  });
+
+  socket.on('conversation_call_leave', async (data) => {
+    const { conversationId } = data || {};
+    if (!conversationId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    socket.to(conversationId).emit('conversation_call_participant_left', {
+      conversationId,
+      userId: user.id,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  socket.on('conversation_call_producer_ready', async (data) => {
+    const { conversationId, producerId, kind, sessionId, source } = data || {};
+    if (!conversationId || !producerId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) {
+      const allowed = await validateConversationParticipation(user.id, conversationId);
+      if (!allowed) return;
+      (socket.data as any).allowedConversations?.add(conversationId);
+      addClientToConversation(socket, conversationId, conversationClients);
+    }
+    socket.to(conversationId).emit('conversation_call_new_producer', {
+      conversationId,
+      sessionId,
+      producerId,
+      kind,
+      source: source === 'screen' ? 'screen' : kind === 'video' ? 'camera' : undefined,
+      userId: user.id,
+      userName: user.name,
+    });
+  });
+
+  socket.on('conversation_call_mute', async (data) => {
+    const { conversationId, audioMuted, videoMuted } = data || {};
+    if (!conversationId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    socket.to(conversationId).emit('conversation_call_participant_updated', {
+      conversationId,
+      userId: user.id,
+      audioMuted: !!audioMuted,
+      videoMuted: !!videoMuted,
+    });
+  });
+
+  socket.on('conversation_call_annotation_stroke', async (data) => {
+    const { conversationId, stroke, sessionId } = data || {};
+    if (!conversationId || !stroke?.id) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    socket.to(conversationId).emit('conversation_call_annotation_stroke', {
+      conversationId,
+      sessionId,
+      stroke: {
+        ...stroke,
+        authorUserId: user.id,
+        authorName: user.name,
+      },
+    });
+  });
+
+  socket.on('conversation_call_annotation_clear', async (data) => {
+    const { conversationId, screenOwnerUserId, sessionId } = data || {};
+    if (!conversationId || !screenOwnerUserId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    io.to(conversationId).emit('conversation_call_annotation_clear', {
+      conversationId,
+      screenOwnerUserId,
+      sessionId,
+      clearedBy: user.id,
+    });
+  });
+
+  socket.on('conversation_call_annotation_permission', async (data) => {
+    const { conversationId, screenOwnerUserId, allowOthersToDraw, sessionId } = data || {};
+    if (!conversationId || !screenOwnerUserId) return;
+    if (user.id !== screenOwnerUserId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    socket.to(conversationId).emit('conversation_call_annotation_permission', {
+      conversationId,
+      screenOwnerUserId,
+      allowOthersToDraw: !!allowOthersToDraw,
+      sessionId,
+      updatedBy: user.id,
+    });
+  });
+
+  socket.on('conversation_call_annotation_erase', async (data) => {
+    const { conversationId, screenOwnerUserId, strokeIds, sessionId } = data || {};
+    if (!conversationId || !screenOwnerUserId || !Array.isArray(strokeIds) || !strokeIds.length) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    socket.to(conversationId).emit('conversation_call_annotation_erase', {
+      conversationId,
+      screenOwnerUserId,
+      strokeIds,
+      sessionId,
+      erasedBy: user.id,
+    });
+  });
+
+  socket.on('conversation_call_end', async (data) => {
+    const { conversationId } = data || {};
+    if (!conversationId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    io.to(conversationId).emit('conversation_call_ended', {
+      conversationId,
+      endedBy: user.id,
+      timestamp: new Date().toISOString(),
+    });
+    void fanoutWorkspaceHuddleFromConversation(conversationId, { active: false });
   });
 
   socket.on('ping', () => {
@@ -487,6 +859,26 @@ export const broadcastToChannel = (channelId: string, event: string, data: any) 
 
 export const broadcastToConversation = (conversationId: string, event: string, data: any) => {
   io.to(conversationId).emit(event, data);
+};
+
+export const broadcastWorkspaceHuddleUpdate = (
+  workspaceId: string,
+  event: string,
+  data: any
+) => {
+  io.to(getWorkspaceRoomKey(workspaceId)).emit(event, data);
+};
+
+export const broadcastChatMessage = (
+  roomId: string,
+  scope: 'channel' | 'conversation',
+  message: any
+) => {
+  if (scope === 'channel') {
+    io.to(roomId).emit('new_message', message);
+    return;
+  }
+  io.to(roomId).emit('new_direct_message', message);
 };
 
 export const sendToUser = (userId: string, event: string, data: any) => {

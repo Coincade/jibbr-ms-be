@@ -75,4 +75,36 @@ describe('collaboration-group.controller', () => {
     await acceptGroupInvite(req, res);
     expect(res.status).toHaveBeenCalledWith(404);
   });
+
+  it('acceptGroupInvite activates the membership and invalidates related workspaces', async () => {
+    isWorkspaceAdmin.mockResolvedValue(true);
+    prisma.collaborationGroupMembership.findUnique.mockResolvedValue({
+      id: 'm1',
+      status: 'INVITED',
+    });
+    prisma.collaborationGroupMembership.update.mockResolvedValue({ id: 'm1', status: 'ACTIVE' });
+    prisma.collaborationGroup.findUnique.mockResolvedValue({ name: 'Partners' });
+    prisma.collaborationGroupMembership.findFirst.mockResolvedValue({ workspaceId: 'owner-ws' });
+    prisma.workspace.findUnique.mockResolvedValue({ name: 'Joined Workspace' });
+    prisma.collaborationGroupMembership.findMany.mockResolvedValue([
+      { workspaceId: 'owner-ws' },
+      { workspaceId: 'w2' },
+    ]);
+
+    const req: any = { user: { id: 'u1' }, params: { id: 'g1' }, body: { workspaceId: 'w2' } };
+    const res = createRes();
+
+    await acceptGroupInvite(req, res);
+
+    expect(prisma.collaborationGroupMembership.update).toHaveBeenCalled();
+    expect(prisma.collaborationGroupAuditLog.create).toHaveBeenCalled();
+    expect(NotificationService.notifyCollaborationAdmins).toHaveBeenCalled();
+    expect(streams.publishCollaborationInvalidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceIds: expect.arrayContaining(['owner-ws', 'w2']),
+        reason: 'group_invite_accepted',
+      })
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
 });

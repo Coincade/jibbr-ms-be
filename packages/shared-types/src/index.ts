@@ -64,6 +64,7 @@ export const SERVICE_URLS = {
   AUTH: process.env.AUTH_SERVICE_URL || 'http://localhost:3001',
   UPLOAD: process.env.UPLOAD_SERVICE_URL || 'http://localhost:3002',
   MESSAGING: process.env.MESSAGING_SERVICE_URL || 'http://localhost:3003',
+  CALL: process.env.CALL_SERVICE_URL || 'http://localhost:3005',
 } as const;
 
 // Error types

@@ -131,4 +131,96 @@ describe('workspace-collaboration.controller', () => {
     await createExternalDirectMessage(req, res);
     expect(res.status).toHaveBeenCalledWith(404);
   });
+
+  it('createCollaborationRequest returns 409 when a pending request already exists', async () => {
+    prisma.workspace.findFirst.mockResolvedValue({ id: 'w2', slug: 'target', name: 'Target' });
+    collabAccess.isWorkspaceAdmin.mockResolvedValue(true);
+    prisma.workspaceCollaborationRequest.findFirst.mockResolvedValue({ id: 'pending-1' });
+
+    const req: any = {
+      user: { id: 'u1' },
+      body: { requestingWorkspaceId: 'w1', targetWorkspaceSlug: 'target' },
+    };
+    const res = createRes();
+
+    await createCollaborationRequest(req, res);
+    expect(res.status).toHaveBeenCalledWith(409);
+  });
+
+  it('approveCollaborationRequest creates the collaboration and audit trail on success', async () => {
+    prisma.workspaceCollaborationRequest.findFirst.mockResolvedValue({
+      id: 'r1',
+      status: 'PENDING',
+      requestingWorkspaceId: 'w1',
+      targetWorkspaceId: 'w2',
+      policyTemplate: { allowSharedChannels: true },
+    });
+    collabAccess.isWorkspaceAdmin.mockResolvedValue(true);
+    prisma.collaborationPolicy.create.mockResolvedValue({ id: 'policy-1' });
+    prisma.workspaceCollaboration.create.mockResolvedValue({
+      id: 'link-1',
+      workspaceAId: 'w1',
+      workspaceBId: 'w2',
+      policy: {},
+    });
+    prisma.workspace.findUnique.mockResolvedValue({ name: 'Target Workspace' });
+
+    const req: any = { user: { id: 'u1' }, params: { id: 'r1' } };
+    const res = createRes();
+
+    await approveCollaborationRequest(req, res);
+
+    expect(prisma.workspaceCollaborationRequest.update).toHaveBeenCalled();
+    expect(prisma.collaborationAuditLog.create).toHaveBeenCalled();
+    expect(streams.publishCollaborationInvalidate).toHaveBeenCalled();
+    expect(NotificationService.notifyCollaborationAdmins).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('createSharedChannel creates a shared channel and enqueues membership sync', async () => {
+    prisma.workspaceCollaboration.findFirst.mockResolvedValue({
+      id: 'l1',
+      status: 'ACTIVE',
+      workspaceAId: 'w1',
+      workspaceBId: 'w2',
+      policy: { allowSharedChannels: true },
+    });
+    collabAccess.isWorkspaceAdmin.mockResolvedValue(true);
+    prisma.channel.create.mockResolvedValue({ id: 'ch-1', workspaceId: 'w1' });
+
+    const req: any = {
+      user: { id: 'u1' },
+      params: { id: 'l1' },
+      body: { name: 'shared', ownerWorkspaceId: 'w1' },
+    };
+    const res = createRes();
+
+    await createSharedChannel(req, res);
+
+    expect(prisma.channel.create).toHaveBeenCalled();
+    expect(enqueueMembershipOutboxEvent).toHaveBeenCalled();
+    expect(streams.publishChannelEvent).toHaveBeenCalledWith('channel.created', { id: 'ch-1', workspaceId: 'w1' });
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('revokeCollaborationLink revokes the link and runs cleanup', async () => {
+    prisma.workspaceCollaboration.findFirst.mockResolvedValue({
+      id: 'l1',
+      workspaceAId: 'w1',
+      workspaceBId: 'w2',
+    });
+    collabAccess.isWorkspaceAdmin.mockResolvedValue(true);
+    prisma.workspaceCollaboration.findUniqueOrThrow.mockResolvedValue({ id: 'l1', status: 'REVOKED' });
+    prisma.workspace.findUnique.mockResolvedValue({ name: 'Workspace A' });
+
+    const req: any = { user: { id: 'u1' }, params: { id: 'l1' } };
+    const res = createRes();
+
+    await revokeCollaborationLink(req, res);
+
+    expect(cleanupPairwiseCollaborationArtifacts).toHaveBeenCalled();
+    expect(prisma.collaborationAuditLog.create).toHaveBeenCalled();
+    expect(streams.publishCollaborationInvalidate).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
 });

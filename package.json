@@ -16,9 +16,12 @@
     "dev:upload": "turbo run dev --filter=upload-service",
     "dev:messaging": "turbo run dev --filter=messaging-service",
     "dev:socket": "turbo run dev --filter=socket-service",
+    "dev:call": "turbo run dev --filter=call-service",
     "dev:all": "turbo run dev --filter='./services/*'",
     "start": "turbo run start",
     "test": "turbo run test",
+    "test:unit": "turbo run test:unit --filter='./services/*'",
+    "test:integration": "turbo run test:e2e --filter='./services/*'",
     "test:e2e": "turbo run test:e2e --filter='./services/*'",
     "lint": "turbo run lint",
     "type-check": "turbo run type-check",
@@ -40,8 +43,7 @@
     "turbo": "^2.0.0"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=7.0.0"
+    "node": "22.x"
   },
   "dependencies": {
     "compression": "^1.8.1"

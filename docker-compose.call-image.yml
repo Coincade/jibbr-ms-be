@@ -1,0 +1,20 @@
+# Run a pre-built call-service image from Docker Hub (no build on the Droplet).
+#
+# Uses host networking so mediasoup can bind UDP 40000–49999 without 10k Docker port mappings
+# (publishing 40000-49999/udp causes userland-proxy timeouts on Linux).
+#
+# On the Droplet (after pull):
+#   export CALL_IMAGE=atharvad24/jibbr-call-service:webrtc-ms
+#   docker compose -f docker-compose.call-image.yml up -d
+#
+# Requires services/call-service/.env on the server.
+# Open firewall: TCP 3005, UDP 40000–49999 (or your MEDIASOUP_RTC_* range).
+
+services:
+  call-service:
+    image: ${CALL_IMAGE:-atharvad24/jibbr-call-service:webrtc-ms}
+    container_name: jibbr-call-service
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - services/call-service/.env
