@@ -94,6 +94,32 @@ The remote host must already contain:
 - `docker-compose.call-image.yml`
 - `scripts/check-call-service-health.sh`
 
+### SSH key requirements
+
+`*_CALL_DROPLET_SSH_KEY` must be the **full private key** (`-----BEGIN OPENSSH PRIVATE KEY-----` … `-----END OPENSSH PRIVATE KEY-----`) and must be **passphrase-less**.
+
+GitHub Actions cannot unlock a passphrase-protected key. If the deploy job fails with:
+
+```text
+Error: Command failed: ssh-add -
+Enter passphrase for (stdin):
+```
+
+create a dedicated deploy key with no passphrase:
+
+```bash
+# On your Mac — do not reuse your personal passphrase-protected key
+ssh-keygen -t ed25519 -f ~/.ssh/jibbr_call_deploy -N "" -C "github-actions-call-deploy"
+
+# Copy public key to staging droplet (repeat for production if needed)
+ssh-copy-id -i ~/.ssh/jibbr_call_deploy.pub root@<STAGING_CALL_DROPLET_HOST>
+
+# Paste the private key into GitHub Environment secret STAGING_CALL_DROPLET_SSH_KEY
+pbcopy < ~/.ssh/jibbr_call_deploy
+```
+
+Use the matching private key for `PRODUCTION_CALL_DROPLET_SSH_KEY` after installing the same (or a separate) public key on the production droplet.
+
 ## Rollback
 
 ### App Platform

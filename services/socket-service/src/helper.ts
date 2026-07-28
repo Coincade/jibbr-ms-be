@@ -1,7 +1,6 @@
 import { ZodError } from 'zod';
 import ejs from 'ejs';
-import { dirname } from 'path';
-import { fileURLToPath } from 'url';
+import path from 'path';
 import moment from 'moment';
 import prisma from './config/database.js';
 
@@ -18,10 +17,15 @@ export const renderEmailEjs = async (
   fileName: string,
   payload: any
 ): Promise<string> => {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
+  const templatePath = path.resolve(
+    process.cwd(),
+    'src',
+    'views',
+    'emails',
+    `${fileName}.ejs`
+  );
   const html: string = await ejs.renderFile(
-    __dirname + `/views/emails/${fileName}.ejs`,
+    templatePath,
     payload
   );
   return html;
