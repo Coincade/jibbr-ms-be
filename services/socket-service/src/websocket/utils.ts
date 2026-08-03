@@ -22,6 +22,18 @@ export interface SocketWithUser extends SocketLike {
 }
 
 /**
+ * Read User.tokenVersion without relying on Prisma Client select typings
+ * (editors sometimes cache a pre-tokenVersion client and flag `select: { tokenVersion }`).
+ */
+export const getUserTokenVersion = async (userId: string): Promise<number | null> => {
+  const rows = await prisma.$queryRaw<Array<{ tokenVersion: number | null }>>`
+    SELECT "tokenVersion" FROM "User" WHERE id = ${userId} LIMIT 1
+  `;
+  if (!rows.length) return null;
+  return rows[0]?.tokenVersion ?? 0;
+};
+
+/**
  * Authenticate socket connection using JWT token + tokenVersion revocation check
  */
 export const authenticateSocket = async (
@@ -37,19 +49,16 @@ export const authenticateSocket = async (
     if (!decoded?.id) return null;
 
     const claimedTv = typeof decoded.tv === 'number' ? decoded.tv : 0;
-    const dbUser = await prisma.user.findUnique({
-      where: { id: decoded.id },
-      select: { tokenVersion: true },
-    });
-    if (!dbUser) {
+    const currentTv = await getUserTokenVersion(decoded.id);
+    if (currentTv === null) {
       console.error('Socket authentication failed: user not found', decoded.id);
       return null;
     }
-    if ((dbUser.tokenVersion ?? 0) !== claimedTv) {
+    if (currentTv !== claimedTv) {
       console.error('Socket authentication failed: tokenVersion mismatch', {
         userId: decoded.id,
         claimedTv,
-        currentTv: dbUser.tokenVersion ?? 0,
+        currentTv,
       });
       return null;
     }

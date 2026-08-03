@@ -21,11 +21,44 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+echo "Disk before deploy:"
+df -h / /var/lib/docker 2>/dev/null || df -h /
+
+# Keep only the running call-service image + layers we need; free dangling/unused data
+# so repeated CD pulls don't fill the droplet (common failure: containerd "no space left on device").
+echo "Pruning unused Docker data (images/containers/build cache)…"
+docker container prune -f >/dev/null 2>&1 || true
+docker image prune -af >/dev/null 2>&1 || true
+docker builder prune -af >/dev/null 2>&1 || true
+
+AVAIL_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
+# Require ~2 GiB free before pull (call image + extract headroom).
+if [ -n "${AVAIL_KB}" ] && [ "${AVAIL_KB}" -lt 2000000 ]; then
+  echo "ERROR: only ${AVAIL_KB} KB free on / — need ≥2 GiB to pull call-service." >&2
+  echo "SSH to the droplet and free space, e.g.:" >&2
+  echo "  docker system df" >&2
+  echo "  sudo journalctl --vacuum-size=100M" >&2
+  echo "  sudo apt-get clean" >&2
+  df -h / >&2
+  exit 1
+fi
+
+echo "Disk after prune:"
+df -h / 2>/dev/null || true
+
 echo "Deploying call-service image: $CALL_IMAGE"
-docker pull "$CALL_IMAGE"
+if ! docker pull "$CALL_IMAGE"; then
+  echo "ERROR: docker pull failed (often disk full while extracting layers)." >&2
+  df -h / /var/lib/docker 2>/dev/null || df -h / >&2
+  docker system df >&2 || true
+  exit 1
+fi
 
 export CALL_IMAGE
 docker compose -f "$COMPOSE_FILE" up -d --force-recreate
+
+# Drop any leftover untagged layers from the previous SHA after recreate.
+docker image prune -f >/dev/null 2>&1 || true
 
 echo "Container status:"
 docker compose -f "$COMPOSE_FILE" ps || true

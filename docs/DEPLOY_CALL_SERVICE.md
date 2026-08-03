@@ -178,6 +178,7 @@ Restart Electron after changing `.env`.
 | mediasoup `code:127` | Alpine + glibc worker | Use **bookworm-slim** image (current Dockerfile) |
 | `apt-get` 403 during build | Debian HTTP mirrors in Docker | Current Dockerfile uses Node `fetch` — no apt |
 | Health empty / crash loop | Wrong image or worker failed | `docker pull` latest; check logs |
+| CD `docker pull` fails extracting layer / `no space left on device` | Droplet disk full of old call images | SSH in, `docker system df`, `docker image prune -af`, then re-run CD. Deploy script now prunes before pull. |
 | No audio, health OK | Wrong announced IP or UDP blocked | `MEDIASOUP_ANNOUNCED_IP` = public IPv4; open UDP range |
 | 401 on call API | JWT mismatch | Align `JWT_SECRET` with auth service |
 | Huddle UI stuck | Socket down / wrong URL | `VITE_SOCKET_URL` → dev socket app |
