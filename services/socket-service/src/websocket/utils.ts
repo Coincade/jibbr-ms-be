@@ -34,17 +34,37 @@ export const authenticateSocket = async (
       image?: string;
       tv?: number;
     };
+    if (!decoded?.id) return null;
+
     const claimedTv = typeof decoded.tv === 'number' ? decoded.tv : 0;
     const dbUser = await prisma.user.findUnique({
       where: { id: decoded.id },
       select: { tokenVersion: true },
     });
-    if (!dbUser || (dbUser.tokenVersion ?? 0) !== claimedTv) {
+    if (!dbUser) {
+      console.error('Socket authentication failed: user not found', decoded.id);
+      return null;
+    }
+    if ((dbUser.tokenVersion ?? 0) !== claimedTv) {
+      console.error('Socket authentication failed: tokenVersion mismatch', {
+        userId: decoded.id,
+        claimedTv,
+        currentTv: dbUser.tokenVersion ?? 0,
+      });
       return null;
     }
     return decoded;
   } catch (error) {
-    console.error('Socket authentication failed:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    // Missing column after deploy without migrate — surface clearly in logs.
+    if (/tokenVersion/i.test(message) || /column .* does not exist/i.test(message)) {
+      console.error(
+        'Socket authentication failed: tokenVersion DB column missing. Run: cd packages/database && npx prisma migrate deploy',
+        error
+      );
+    } else {
+      console.error('Socket authentication failed:', error);
+    }
     return null;
   }
 };
