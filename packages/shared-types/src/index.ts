@@ -12,6 +12,8 @@ export interface JWTPayload {
   id: string;
   name: string | null;
   email: string;
+  /** Session epoch — bump on logout / password change to revoke older JWTs */
+  tv?: number;
   iat?: number;
   exp?: number;
 }

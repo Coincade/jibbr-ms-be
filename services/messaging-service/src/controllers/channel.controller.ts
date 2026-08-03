@@ -9,6 +9,7 @@ import {
   publishChannelEvent,
 } from "../services/streams-publisher.service.js";
 import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
+import { getSignedSpacesUrl } from "../config/upload.js";
 
 const createChannelSchema = z.object({
   name: z.string().min(1),
@@ -278,7 +279,7 @@ async function buildChannelDetailPayload(channelId: string, userId: string) {
     take: 50
   });
 
-  const media = attachmentMessages
+  const mediaRaw = attachmentMessages
     .flatMap((message) =>
       message.attachments
         .filter((attachment) => isMediaMimeType(attachment.mimeType))
@@ -295,7 +296,7 @@ async function buildChannelDetailPayload(channelId: string, userId: string) {
     )
     .slice(0, CHANNEL_ASSET_PREVIEW_LIMIT);
 
-  const files = attachmentMessages
+  const filesRaw = attachmentMessages
     .flatMap((message) =>
       message.attachments
         .filter((attachment) => !isMediaMimeType(attachment.mimeType))
@@ -311,6 +312,21 @@ async function buildChannelDetailPayload(channelId: string, userId: string) {
         }))
     )
     .slice(0, CHANNEL_ASSET_PREVIEW_LIMIT);
+
+  const [media, files] = await Promise.all([
+    Promise.all(
+      mediaRaw.map(async (item) => ({
+        ...item,
+        url: await getSignedSpacesUrl(item.url).catch(() => item.url),
+      }))
+    ),
+    Promise.all(
+      filesRaw.map(async (item) => ({
+        ...item,
+        url: await getSignedSpacesUrl(item.url).catch(() => item.url),
+      }))
+    ),
+  ]);
 
   const links = linkMessages
     .flatMap((message) =>

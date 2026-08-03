@@ -39,13 +39,23 @@ import { handleMarkAsRead } from './handlers/mark-as-read.handler.js';
 import { createWsServer, type IoLike, type SocketLike } from './ws-compat.js';
 import { warmMembershipCacheForUser } from '../services/socket-membership-cache.service.js';
 import { checkSocketEventRateLimitDistributed } from '../services/socket-event-rate-limiter.service.js';
+import {
+  redisPresenceOnline,
+  redisPresenceOffline,
+  redisPresenceHeartbeat,
+  redisGetOnlineUsers,
+  redisIsUserOnline,
+  redisGetUsersOnlineStatus,
+} from '../services/presence-redis.service.js';
 
 // Global state for managing connections
 let io: IoLike;
 const channelClients: Map<string, Set<SocketLike>> = new Map();
 const conversationClients: Map<string, Set<SocketLike>> = new Map();
-const onlineUsers: Map<string, Set<SocketLike>> = new Map(); // userId -> Set of sockets
+const onlineUsers: Map<string, Set<SocketLike>> = new Map(); // userId -> Set of sockets (local)
 const userSockets: Map<string, string> = new Map(); // socketId -> userId
+
+const AUTH_TIMEOUT_MS = 5_000;
 
 export const initializeWebSocketService = async (server: Server): Promise<IoLike> => {
   const {
@@ -53,6 +63,8 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
     io: wsIo,
     createSocketFromWs,
     authenticateFromRequestUrl,
+    authenticateFromProtocols,
+    authenticateWithToken,
     parseIncomingFrame,
     getAllClients,
   } = createWsServer(server);
@@ -111,28 +123,13 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
     }
   })();
 
-  wss.on('connection', (ws, req) => {
-    (ws as any).isAlive = true;
-    ws.on('pong', () => {
-      (ws as any).isAlive = true;
-    });
-
-    const user = authenticateFromRequestUrl(req.url);
-    if (!user) {
-      try {
-        ws.close(1008, 'Authentication required');
-      } catch {
-        // ignore
-      }
-      return;
-    }
-
+  const attachAuthenticatedSocket = (ws: any, user: { id: string; name?: string; email?: string; image?: string }) => {
     const socket = createSocketFromWs(ws) as any as SocketLike & {
       _dispatchIncoming: (type: string, payload: any) => void;
     };
     socket.data.user = user as any;
 
-    ws.on('message', (raw) => {
+    ws.on('message', (raw: any) => {
       const frame = parseIncomingFrame(raw);
       if (!frame) {
         socket.emit('error', { message: 'Invalid message format' });
@@ -141,16 +138,69 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
       socket._dispatchIncoming(frame.type, frame.data);
     });
 
-    ws.on('close', (_code, reason) => {
+    ws.on('close', (_code: number, reason: any) => {
       socket._dispatchIncoming('disconnect', String(reason || 'close'));
       getAllClients().delete(socket as any);
     });
 
-    ws.on('error', (err) => {
+    ws.on('error', (err: Error) => {
       socket._dispatchIncoming('error', err);
     });
 
     handleConnection(socket);
+  };
+
+  wss.on('connection', async (ws, req) => {
+    (ws as any).isAlive = true;
+    ws.on('pong', () => {
+      (ws as any).isAlive = true;
+    });
+
+    // Prefer subprotocol / first-message auth; query `?token=` kept as migration fallback.
+    let user =
+      (await authenticateFromProtocols(req)) ||
+      (await authenticateFromRequestUrl(req.url));
+
+    if (user) {
+      attachAuthenticatedSocket(ws, user);
+      return;
+    }
+
+    const authTimer = setTimeout(() => {
+      try {
+        ws.close(1008, 'Authentication required');
+      } catch {
+        // ignore
+      }
+    }, AUTH_TIMEOUT_MS);
+
+    const onAuthMessage = async (raw: any) => {
+      const frame = parseIncomingFrame(raw);
+      if (!frame || frame.type !== 'auth') {
+        try {
+          ws.send(JSON.stringify({ type: 'error', message: 'Authentication required' }));
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      const token = typeof frame.data?.token === 'string' ? frame.data.token : '';
+      user = await authenticateWithToken(token);
+      if (!user) {
+        clearTimeout(authTimer);
+        try {
+          ws.close(1008, 'Authentication required');
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      clearTimeout(authTimer);
+      ws.off('message', onAuthMessage);
+      attachAuthenticatedSocket(ws, user);
+    };
+
+    ws.on('message', onAuthMessage);
   });
 
   return io;
@@ -167,7 +217,6 @@ const handleConnection = (socket: SocketLike): void => {
   // Populated on join_* events after validation.
   (socket.data as any).allowedChannels = new Set<string>();
   (socket.data as any).allowedConversations = new Set<string>();
-  (socket.data as any).allowedConversations = new Set<string>();
   (socket.data as any).allowedWorkspaces = new Set<string>();
 
   // Personal room for direct messaging + notifications
@@ -175,7 +224,6 @@ const handleConnection = (socket: SocketLike): void => {
 
   addUserToOnlineList(user.id, socket);
   userSockets.set(socket.id, user.id);
-  broadcastUserOnlineStatus(user.id, true);
 
   // Register handlers before `authenticated` so join_* events are never missed.
   // Membership cache must be warm before the client runs join_workspace; otherwise
@@ -349,7 +397,7 @@ const handleConnection = (socket: SocketLike): void => {
       userName: user.name,
       timestamp: new Date().toISOString(),
     });
-    void fanoutWorkspaceHuddleFromChannel(channelId, { active: true });
+    // Do not fan sparse { active: true } — call-service emits authoritative presence.
   });
 
   socket.on('channel_call_leave', async (data) => {
@@ -377,7 +425,8 @@ const handleConnection = (socket: SocketLike): void => {
     if (!data.producerId) return;
     const payload = {
       ...data,
-      userId: data.userId ?? user.id,
+      // Never trust client-supplied userId for producer closed (spoofing).
+      userId: user.id,
       timestamp: new Date().toISOString(),
     };
     if (scope === 'channel' && data.channelId) {
@@ -491,7 +540,31 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('channel_call_end', async (data) => {
     const { channelId } = data || {};
     if (!channelId) return;
-    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'presence'))) return;
+    // Re-validate membership (allowedChannels can be stale after revoke).
+    const isMember = await validateChannelMembership(user.id, channelId);
+    if (!isMember) {
+      socket.emit('error', { message: 'You are not a member of this channel' });
+      return;
+    }
+
+    // While the SFU room is still live, only the host may fan out "ended".
+    // Empty/inactive rooms may be cleared by any member (last-leave cleanup).
+    const { fetchCallRoomHostStatus } = await import('../services/call-kick.service.js');
+    const hostStatus = await fetchCallRoomHostStatus({ userId: user.id, channelId });
+    if (
+      hostStatus?.active &&
+      hostStatus.participantCount > 0 &&
+      !hostStatus.isHost
+    ) {
+      socket.emit('error', {
+        message: 'Only the huddle host can end the call for everyone',
+      });
+      return;
+    }
+
+    (socket.data as any).allowedChannels?.add(channelId);
+    // Presence-only signal for peers; mediasoup close is owned by call-service (host HTTP end / last leave).
     io.to(channelId).emit('channel_call_ended', {
       channelId,
       endedBy: user.id,
@@ -546,7 +619,7 @@ const handleConnection = (socket: SocketLike): void => {
       userName: user.name,
       timestamp: new Date().toISOString(),
     });
-    void fanoutWorkspaceHuddleFromConversation(conversationId, { active: true });
+    // Do not fan sparse { active: true } — call-service emits authoritative presence.
   });
 
   socket.on('conversation_call_leave', async (data) => {
@@ -649,7 +722,30 @@ const handleConnection = (socket: SocketLike): void => {
   socket.on('conversation_call_end', async (data) => {
     const { conversationId } = data || {};
     if (!conversationId) return;
-    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    if (!(await checkSocketEventRateLimitDistributed(user.id, 'presence'))) return;
+    const ok = await validateConversationParticipation(user.id, conversationId);
+    if (!ok) {
+      socket.emit('error', { message: 'You are not a participant in this conversation' });
+      return;
+    }
+
+    const { fetchCallRoomHostStatus } = await import('../services/call-kick.service.js');
+    const hostStatus = await fetchCallRoomHostStatus({
+      userId: user.id,
+      conversationId,
+    });
+    if (
+      hostStatus?.active &&
+      hostStatus.participantCount > 0 &&
+      !hostStatus.isHost
+    ) {
+      socket.emit('error', {
+        message: 'Only the huddle host can end the call for everyone',
+      });
+      return;
+    }
+
+    (socket.data as any).allowedConversations?.add(conversationId);
     io.to(conversationId).emit('conversation_call_ended', {
       conversationId,
       endedBy: user.id,
@@ -659,6 +755,7 @@ const handleConnection = (socket: SocketLike): void => {
   });
 
   socket.on('ping', () => {
+    void redisPresenceHeartbeat(user.id);
     socket.emit('pong', { timestamp: Date.now() });
   });
 
@@ -826,12 +923,6 @@ const handleDisconnection = (socket: SocketLike): void => {
   if (userId) {
     removeUserFromOnlineList(userId, socket);
     userSockets.delete(socket.id);
-
-    const isStillOnline = onlineUsers.has(userId) && onlineUsers.get(userId)!.size > 0;
-    if (!isStillOnline) {
-      broadcastUserOnlineStatus(userId, false);
-      setUserStatusToAway(userId);
-    }
   }
 
   removeClientFromAllChannels(socket, channelClients);
@@ -885,15 +976,66 @@ export const sendToUser = (userId: string, event: string, data: any) => {
   io.to(`user_${userId}`).emit(event, data);
 };
 
+/**
+ * Clear per-socket channel privileges, leave the room, and notify the user.
+ * Used when membership is revoked so stale allowedChannels cannot keep Jabbr signaling alive.
+ */
+export const revokeUserChannelAccess = (userId: string, channelId: string): void => {
+  const sockets = onlineUsers.get(userId);
+  if (sockets) {
+    for (const socket of sockets) {
+      (socket.data as any).allowedChannels?.delete(channelId);
+      removeClientFromChannel(socket, channelId, channelClients);
+    }
+  }
+  sendToUser(userId, 'channel_access_revoked', {
+    channelId,
+    reason: 'membership_removed',
+    timestamp: new Date().toISOString(),
+  });
+};
+
+/**
+ * Clear per-socket conversation privileges, leave the room, and notify the user.
+ */
+export const revokeUserConversationAccess = (userId: string, conversationId: string): void => {
+  const sockets = onlineUsers.get(userId);
+  if (sockets) {
+    for (const socket of sockets) {
+      (socket.data as any).allowedConversations?.delete(conversationId);
+      removeClientFromConversation(socket, conversationId, conversationClients);
+    }
+  }
+  sendToUser(userId, 'conversation_access_revoked', {
+    conversationId,
+    reason: 'membership_removed',
+    timestamp: new Date().toISOString(),
+  });
+};
+
 const addUserToOnlineList = (userId: string, socket: SocketLike): void => {
+  const wasOffline = !onlineUsers.has(userId) || onlineUsers.get(userId)!.size === 0;
   if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
   onlineUsers.get(userId)!.add(socket);
+  void redisPresenceOnline(userId).then(() => {
+    if (wasOffline) broadcastUserOnlineStatus(userId, true);
+  });
 };
 
 const removeUserFromOnlineList = (userId: string, socket: SocketLike): void => {
   if (!onlineUsers.has(userId)) return;
   onlineUsers.get(userId)!.delete(socket);
-  if (onlineUsers.get(userId)!.size === 0) onlineUsers.delete(userId);
+  if (onlineUsers.get(userId)!.size === 0) {
+    onlineUsers.delete(userId);
+    void redisPresenceOffline(userId).then((stillOnlineElsewhere) => {
+      if (!stillOnlineElsewhere) {
+        broadcastUserOnlineStatus(userId, false);
+        setUserStatusToAway(userId);
+      }
+    });
+  } else {
+    void redisPresenceOffline(userId);
+  }
 };
 
 const broadcastUserOnlineStatus = (userId: string, isOnline: boolean): void => {
@@ -916,13 +1058,30 @@ const setUserStatusToAway = (userId: string): void => {
     .catch((err) => console.error(`[socket] Failed to set user ${userId} status to away:`, err));
 };
 
-export const getOnlineUsers = (): string[] => Array.from(onlineUsers.keys());
-export const isUserOnline = (userId: string): boolean =>
-  onlineUsers.has(userId) && onlineUsers.get(userId)!.size > 0;
-export const getUsersOnlineStatus = (userIds: string[]): Record<string, boolean> => {
-  const status: Record<string, boolean> = {};
-  userIds.forEach((id) => (status[id] = isUserOnline(id)));
+export const getOnlineUsers = async (): Promise<string[]> => {
+  const fromRedis = await redisGetOnlineUsers();
+  if (fromRedis.length > 0) return fromRedis;
+  return Array.from(onlineUsers.keys());
+};
+export const isUserOnline = async (userId: string): Promise<boolean> => {
+  const redisOnline = await redisIsUserOnline(userId);
+  if (redisOnline) return true;
+  return onlineUsers.has(userId) && onlineUsers.get(userId)!.size > 0;
+};
+export const getUsersOnlineStatus = async (
+  userIds: string[]
+): Promise<Record<string, boolean>> => {
+  const fromRedis = await redisGetUsersOnlineStatus(userIds);
+  const status: Record<string, boolean> = { ...fromRedis };
+  userIds.forEach((id) => {
+    if (!status[id]) {
+      status[id] = onlineUsers.has(id) && onlineUsers.get(id)!.size > 0;
+    }
+  });
   return status;
 };
-export const getOnlineUsersCount = (): number => onlineUsers.size;
+export const getOnlineUsersCount = async (): Promise<number> => {
+  const users = await getOnlineUsers();
+  return users.length;
+};
 

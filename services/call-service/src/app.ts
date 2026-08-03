@@ -1,6 +1,7 @@
-import express, { Application, Request, Response } from 'express';
+import express, { Application, Request, Response, Router } from 'express';
 import cors from 'cors';
 import callRoutes from './routes/call.route.js';
+import { hostCheckInternal, kickPeerInternal } from './routes/internal-call.route.js';
 import { getCallServiceHealth } from './services/health.service.js';
 
 export const createCallApp = (): Application => {
@@ -19,6 +20,15 @@ export const createCallApp = (): Application => {
     const statusCode = health.status === 'unhealthy' ? 503 : 200;
     res.status(statusCode).json(health);
   });
+
+  const internal = Router();
+  internal.post('/call/kick-peer', (req, res) => {
+    void kickPeerInternal(req, res);
+  });
+  internal.post('/call/host-check', (req, res) => {
+    void hostCheckInternal(req, res);
+  });
+  app.use('/internal', internal);
 
   app.use('/api', callRoutes);
 

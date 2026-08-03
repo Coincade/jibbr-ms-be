@@ -88,6 +88,7 @@ describe('call.controller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = { ...ORIGINAL_ENV };
+    assertRoomMemberMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -153,6 +154,7 @@ describe('call.controller', () => {
   });
 
   it('produce returns 404 when the send transport does not match the request', async () => {
+    assertRoomMemberMock.mockResolvedValue(undefined);
     getRoomMock.mockReturnValue({
       peers: new Map([['user-1', { sendTransport: { id: 'other-transport' } }]]),
     });
@@ -169,11 +171,59 @@ describe('call.controller', () => {
 
     await import('../src/controllers/call.controller.js').then((m) => m.produce(req, res));
 
+    expect(assertRoomMemberMock).toHaveBeenCalledWith('user-1', 'room-1');
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json).toHaveBeenCalledWith({ error: 'Send transport not found' });
   });
 
+  it('produce returns 403 when membership is revoked mid-call', async () => {
+    assertRoomMemberMock.mockRejectedValue(new Error('You are not a member of this channel'));
+    const req: any = {
+      body: {
+        channelId: 'room-1',
+        transportId: 'transport-1',
+        kind: 'audio',
+        rtpParameters: {},
+      },
+      user: { id: 'user-1' },
+    };
+    const res = createRes();
+
+    await import('../src/controllers/call.controller.js').then((m) => m.produce(req, res));
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(getRoomMock).not.toHaveBeenCalled();
+  });
+
+  it('getChannelCall returns 403 for non-members', async () => {
+    assertRoomMemberMock.mockRejectedValue(new Error('You are not a member of this channel'));
+    const req: any = {
+      params: { channelId: 'room-1' },
+      user: { id: 'user-1' },
+    };
+    const res = createRes();
+
+    await import('../src/controllers/call.controller.js').then((m) => m.getChannelCall(req, res));
+
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('leaveChannelCall returns 403 for non-members', async () => {
+    assertRoomMemberMock.mockRejectedValue(new Error('You are not a member of this channel'));
+    const req: any = {
+      params: { channelId: 'room-1' },
+      user: { id: 'user-1' },
+    };
+    const res = createRes();
+
+    await import('../src/controllers/call.controller.js').then((m) => m.leaveChannelCall(req, res));
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(removePeerMock).not.toHaveBeenCalled();
+  });
+
   it('consume returns 400 when the router cannot consume the producer', async () => {
+    assertRoomMemberMock.mockResolvedValue(undefined);
     getRoomMock.mockReturnValue({
       router: { canConsume: vi.fn(() => false) },
     });
@@ -190,6 +240,7 @@ describe('call.controller', () => {
 
     await import('../src/controllers/call.controller.js').then((m) => m.consume(req, res));
 
+    expect(assertRoomMemberMock).toHaveBeenCalledWith('user-1', 'room-1');
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: 'Cannot consume producer' });
   });

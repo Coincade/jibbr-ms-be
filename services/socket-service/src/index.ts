@@ -31,6 +31,18 @@ const PORT = process.env.PORT || process.env.SOCKET_PORT || 3004;
 // Initialize WebSocket service
 (async () => {
   try {
+    const [{ setTokenVersionLookup }, { default: prisma }] = await Promise.all([
+      import('@jibbr/auth-middleware'),
+      import('./config/database.js'),
+    ]);
+    setTokenVersionLookup(async (userId: string) => {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { tokenVersion: true },
+      });
+      return user ? (user.tokenVersion ?? 0) : null;
+    });
+
     const { initializeWebSocketService } = await import('./websocket/index.js');
     await initializeWebSocketService(httpServer);
 

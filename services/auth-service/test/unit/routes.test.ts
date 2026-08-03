@@ -7,6 +7,7 @@ const authController = vi.hoisted(() => ({
   register: vi.fn((_req: any, res: any) => res.status(200).json({ ok: 'register' })),
   login: vi.fn((_req: any, res: any) => res.status(200).json({ ok: 'login' })),
   logout: vi.fn((_req: any, res: any) => res.status(200).json({ ok: 'logout' })),
+  refreshAccessToken: vi.fn((_req: any, res: any) => res.status(200).json({ ok: 'refresh' })),
   getUser: vi.fn((_req: any, res: any) => res.status(200).json({ ok: 'getUser' })),
   forgetPassword: vi.fn((_req: any, res: any) => res.status(200).json({ ok: 'forgetPassword' })),
   forgetResetPassword: vi.fn((_req: any, res: any) => res.status(200).json({ ok: 'forgetResetPassword' })),
@@ -76,11 +77,13 @@ describe('Routes Wiring Test', () => {
       expect(authController.login).toHaveBeenCalledTimes(1);
     });
 
-    it('POST /logout calls logout', async () => {
+    it('POST /logout uses authMiddleware then logout', async () => {
+      authMiddleware.mockClear();
       const app = createTestApp();
       const res = await request(app).post('/api/auth/logout').send({});
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: 'logout' });
+      expect(authMiddleware).toHaveBeenCalledTimes(1);
       expect(authController.logout).toHaveBeenCalledTimes(1);
     });
 

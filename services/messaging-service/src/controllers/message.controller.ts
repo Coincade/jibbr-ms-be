@@ -6,7 +6,12 @@ import {
 } from "../helper.js";
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
-import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
+import {
+  uploadToSpaces,
+  deleteFromSpaces,
+  signMessageAttachments,
+  signMessagesAttachments,
+} from "../config/upload.js";
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from "../services/mention.service.js"; // [mentions]
 import { htmlToCleanText } from "../libs/htmlToCleanText.js";
 import { publishMessageCreatedEvent, publishMessageUpdatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
@@ -148,7 +153,7 @@ export const sendMessage = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       message: "Message sent successfully",
-      data: message,
+      data: await signMessageAttachments(message),
     });
   } catch (error) {
     if (error instanceof ZodError) {
@@ -304,7 +309,7 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
 
     return res.status(201).json({
       message: "Message sent successfully",
-      data: message,
+      data: await signMessageAttachments(message),
     });
   } catch (error) {
     if (error instanceof ZodError) {
@@ -407,11 +412,12 @@ export const getMessages = async (req: Request, res: Response) => {
     });
     countMs = Date.now() - countStartAt;
     const nextCursor = messages.length > 0 ? messages[messages.length - 1].createdAt.toISOString() : null;
+    const signedMessages = await signMessagesAttachments(messages);
 
     return res.status(200).json({
       message: "Messages fetched successfully",
       data: {
-        messages,
+        messages: signedMessages,
         nextCursor,
         pagination: {
           page: payload.page,
@@ -553,7 +559,7 @@ export const getMessage = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       message: "Message fetched successfully",
-      data: message,
+      data: await signMessageAttachments(message),
     });
   } catch (error) {
     if (error instanceof ZodError) {

@@ -1,12 +1,14 @@
 import express, { RequestHandler } from "express";
-import { login, logout, register, getUser, forgetPassword, forgetResetPassword, resetPassword, deleteUser, resendVerificationEmail } from "../controllers/auth.controller.js";
+import { login, logout, register, getUser, forgetPassword, forgetResetPassword, resetPassword, deleteUser, resendVerificationEmail, refreshAccessToken } from "../controllers/auth.controller.js";
 import authMiddleware from "../middleware/Auth.middleware.js";
 
 const router = express.Router();
 
 router.post("/register", register as unknown as RequestHandler);
 router.post("/login", login as unknown as RequestHandler);
-router.post("/logout", logout as unknown as RequestHandler);
+router.post("/logout", authMiddleware as unknown as RequestHandler, logout as unknown as RequestHandler);
+router.post("/refresh", refreshAccessToken as unknown as RequestHandler);
+router.post("/refresh-token", refreshAccessToken as unknown as RequestHandler);
 
 //Email Verification Routes
 router.post("/resend-verification", resendVerificationEmail as unknown as RequestHandler);

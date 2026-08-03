@@ -32,14 +32,15 @@ describe('config/upload', () => {
     );
   });
 
-  it('uploadToSpaces resolves uploaded location on success', async () => {
+  it('uploadToSpaces resolves permanent Spaces URL on success', async () => {
     const send = vi.fn((cb: (err: unknown, result: { Location: string }) => void) =>
       cb(null, { Location: 'https://cdn.example.com/attachments/file.txt' })
     );
     const upload = vi.fn(() => ({ send }));
     const deleteObject = vi.fn();
+    const getSignedUrlPromise = vi.fn();
     const S3 = vi.fn(function MockS3() {
-      return { upload, deleteObject };
+      return { upload, deleteObject, getSignedUrlPromise };
     });
     const Endpoint = vi.fn(function MockEndpoint() {
       return {};
@@ -51,6 +52,7 @@ describe('config/upload', () => {
     }));
 
     process.env.DO_SPACES_BUCKET = 'test-bucket';
+    process.env.DO_SPACES_ENDPOINT = 'nyc3.digitaloceanspaces.com';
 
     const { uploadToSpaces } = await import('../src/config/upload.js');
 
@@ -62,13 +64,14 @@ describe('config/upload', () => {
 
     const url = await uploadToSpaces(file, 'attachments');
 
-    expect(url).toBe('https://cdn.example.com/attachments/file.txt');
+    expect(url).toMatch(/^https:\/\/test-bucket\.nyc3\.digitaloceanspaces\.com\/attachments\//);
+    expect(url).toContain('a.txt');
     expect(upload).toHaveBeenCalledWith(
       expect.objectContaining({
         Bucket: 'test-bucket',
         Body: file.buffer,
         ContentType: 'text/plain',
-        ACL: 'public-read',
+        ACL: 'private',
       })
     );
   });

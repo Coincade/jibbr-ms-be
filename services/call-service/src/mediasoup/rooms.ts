@@ -57,6 +57,7 @@ export type Room = {
 };
 
 const rooms = new Map<string, Room>();
+const roomCreateInFlight = new Map<string, Promise<Room>>();
 
 const snapshotForRedis = (room: Room) => ({
   roomId: room.roomId,
@@ -80,28 +81,42 @@ export const getOrCreateRoom = async (
   const existing = rooms.get(roomId);
   if (existing) return existing;
 
-  // Try to restore metadata from Redis (e.g. after a restart)
-  const persisted = await getPersistedRoom(roomId);
+  const inFlight = roomCreateInFlight.get(roomId);
+  if (inFlight) return inFlight;
 
-  const worker = getNextWorker();
-  const router = await worker.createRouter({ mediaCodecs });
+  const createPromise = (async (): Promise<Room> => {
+    // Re-check after acquiring the single-flight slot (another awaiter may have finished).
+    const raced = rooms.get(roomId);
+    if (raced) return raced;
 
-  const room: Room = {
-    roomId,
-    sessionId: persisted?.sessionId ?? randomUUID(),
-    hostUserId: persisted?.hostUserId ?? options?.hostUserId ?? '',
-    huddleDbId: persisted?.huddleDbId ?? options?.huddleDbId,
-    router,
-    workerPid: worker.pid,
-    peers: new Map(),
-    peakParticipantCount: persisted?.peakParticipantCount ?? 0,
-    createdAt: persisted ? new Date(persisted.createdAt) : new Date(),
-  };
+    // Try to restore metadata from Redis (e.g. after a restart)
+    const persisted = await getPersistedRoom(roomId);
 
-  rooms.set(roomId, room);
-  trackRoomOnWorker(room.workerPid);
-  void persistRoom(snapshotForRedis(room));
-  return room;
+    const worker = getNextWorker();
+    const router = await worker.createRouter({ mediaCodecs });
+
+    const room: Room = {
+      roomId,
+      sessionId: persisted?.sessionId ?? randomUUID(),
+      hostUserId: persisted?.hostUserId ?? options?.hostUserId ?? '',
+      huddleDbId: persisted?.huddleDbId ?? options?.huddleDbId,
+      router,
+      workerPid: worker.pid,
+      peers: new Map(),
+      peakParticipantCount: persisted?.peakParticipantCount ?? 0,
+      createdAt: persisted ? new Date(persisted.createdAt) : new Date(),
+    };
+
+    rooms.set(roomId, room);
+    trackRoomOnWorker(room.workerPid);
+    void persistRoom(snapshotForRedis(room));
+    return room;
+  })().finally(() => {
+    roomCreateInFlight.delete(roomId);
+  });
+
+  roomCreateInFlight.set(roomId, createPromise);
+  return createPromise;
 };
 
 export const getRoom = (roomId: string): Room | undefined => rooms.get(roomId);
@@ -160,6 +175,13 @@ export const removePeer = async (roomId: string, userId: string): Promise<{ room
   peer.sendTransport?.close();
   peer.recvTransport?.close();
   room.peers.delete(userId);
+
+  // Transfer host if the departing peer was host
+  if (room.hostUserId === userId && room.peers.size > 0) {
+    const nextHost = room.peers.keys().next().value as string | undefined;
+    if (nextHost) room.hostUserId = nextHost;
+  }
+
   void persistRoom(snapshotForRedis(room));
 
   if (room.peers.size === 0) {
@@ -202,18 +224,19 @@ const closeRoom = async (roomId: string): Promise<void> => {
   const peakCount = Math.max(room.peakParticipantCount, room.peers.size, 1);
   // Lock via DB update (closeRoom can be invoked concurrently from multiple peers).
   const endedCount = await endHuddleSessionRecord(roomId, peakCount);
-  const shouldPost = endedCount > 0;
+  const shouldPostChat = endedCount > 0;
 
-  if (shouldPost) {
+  if (shouldPostChat) {
     await createHuddleEndedMessage(roomId, room, peakCount);
+  }
 
-    const workspaceId = await resolveWorkspaceIdForRoom(roomId);
-    if (workspaceId) {
-      void emitWorkspaceHuddleUpdate(
-        workspaceId,
-        buildWorkspaceHuddleInactivePayload(workspaceId, roomId)
-      );
-    }
+  // Always clear live presence when the mediasoup room dies (even if no DB session row).
+  const workspaceId = await resolveWorkspaceIdForRoom(roomId);
+  if (workspaceId) {
+    void emitWorkspaceHuddleUpdate(
+      workspaceId,
+      buildWorkspaceHuddleInactivePayload(workspaceId, roomId)
+    );
   }
 
   room.router.close();

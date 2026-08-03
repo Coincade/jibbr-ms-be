@@ -324,7 +324,10 @@ describe('Auth Controller Passwords/Delete Testing', () => {
 
       expect((prisma as any).user.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { password: 'new-hash' },
+          data: {
+            password: 'new-hash',
+            tokenVersion: { increment: 1 },
+          },
         })
       );
       expect(res.status).toHaveBeenCalledWith(200);

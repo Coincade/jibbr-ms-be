@@ -22,11 +22,26 @@ export interface SocketWithUser extends SocketLike {
 }
 
 /**
- * Authenticate socket connection using JWT token
+ * Authenticate socket connection using JWT token + tokenVersion revocation check
  */
-export const authenticateSocket = (token: string): JwtPayload & { id: string; name?: string; image?: string } | null => {
+export const authenticateSocket = async (
+  token: string
+): Promise<(JwtPayload & { id: string; name?: string; image?: string; tv?: number }) | null> => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload & { id: string; name?: string; image?: string };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload & {
+      id: string;
+      name?: string;
+      image?: string;
+      tv?: number;
+    };
+    const claimedTv = typeof decoded.tv === 'number' ? decoded.tv : 0;
+    const dbUser = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      select: { tokenVersion: true },
+    });
+    if (!dbUser || (dbUser.tokenVersion ?? 0) !== claimedTv) {
+      return null;
+    }
     return decoded;
   } catch (error) {
     console.error('Socket authentication failed:', error);

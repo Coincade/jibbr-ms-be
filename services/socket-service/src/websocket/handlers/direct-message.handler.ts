@@ -207,29 +207,55 @@ export const handleSendDirectMessage = async (
     };
 
     // OPTIMIZATION: Create message with minimal includes for faster DB write
-    const message = await prisma.message.create({
-      data: messageData,
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-          },
+    const messageInclude = {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          image: true,
         },
-        replyTo: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-              },
+      },
+      replyTo: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
             },
           },
         },
-        // Don't include attachments/reactions here - we'll add them after
       },
-    });
+    } as const;
+
+    let message;
+    try {
+      message = await prisma.message.create({
+        data: messageData,
+        include: messageInclude,
+      });
+    } catch (createError: any) {
+      if (createError?.code === 'P2002' && payload.clientMessageId) {
+        const existing = await prisma.message.findFirst({
+          where: {
+            userId: socket.data.user.id,
+            clientMessageId: payload.clientMessageId,
+            deletedAt: null,
+          },
+          include: messageInclude,
+        });
+        if (existing) {
+          socket.emit('message_sent', {
+            id: existing.id,
+            clientMessageId: payload.clientMessageId,
+            channelId: existing.channelId,
+            conversationId: existing.conversationId,
+            createdAt: existing.createdAt.toISOString(),
+          });
+          return;
+        }
+      }
+      throw createError;
+    }
 
     // When this is a thread reply, mark parent message as thread so all clients show thread UI
     let parentMessageUpdated: { id: string; isThread: true } | undefined;

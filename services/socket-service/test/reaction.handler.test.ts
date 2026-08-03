@@ -4,6 +4,9 @@ const validateChannelMembership = vi.hoisted(() => vi.fn(async () => true));
 const assertCanMutateSharedChannel = vi.hoisted(() => vi.fn(async () => undefined));
 
 const prisma = vi.hoisted(() => ({
+  message: {
+    findUnique: vi.fn(),
+  },
   reaction: {
     create: vi.fn(),
     findFirst: vi.fn(),
@@ -35,6 +38,11 @@ function createSocket() {
 describe('reaction.handler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.message.findUnique.mockResolvedValue({
+      id: 'm1',
+      channelId: 'c1',
+      deletedAt: null,
+    });
   });
 
   it('adds reaction and emits ack when clientOpId present', async () => {

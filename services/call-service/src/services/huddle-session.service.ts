@@ -1,5 +1,5 @@
 import prisma from '../config/database.js';
-import { isConversationRoom, conversationIdFromRoom } from '../utils/room-id.js';
+import { conversationIdFromRoom } from '../utils/room-id.js';
 
 export const startHuddleSessionRecord = async (
   roomId: string,
@@ -7,6 +7,13 @@ export const startHuddleSessionRecord = async (
   mediasoupSessionId: string
 ): Promise<string | undefined> => {
   try {
+    // Idempotent under concurrent first joins (partial unique index on open roomId).
+    const existing = await prisma.huddleSession.findFirst({
+      where: { roomId, endedAt: null },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+
     const conversationId = conversationIdFromRoom(roomId);
     const channelId = conversationId ? null : roomId;
 
@@ -36,7 +43,15 @@ export const startHuddleSessionRecord = async (
       },
     });
     return row.id;
-  } catch (error) {
+  } catch (error: any) {
+    // Unique violation from concurrent create — return the winner.
+    if (error?.code === 'P2002') {
+      const existing = await prisma.huddleSession.findFirst({
+        where: { roomId, endedAt: null },
+        select: { id: true },
+      });
+      if (existing) return existing.id;
+    }
     console.warn('[call-service] Failed to record huddle session start:', error);
     return undefined;
   }
@@ -83,10 +98,61 @@ export const listChannelHuddleHistory = async (channelId: string, limit = 20) =>
 
 export const listRecentHuddles = async (
   workspaceId: string,
+  userId: string,
   limit = 20
 ) => {
+  // Membership-scoped: never expose private-channel or DM sessions to non-members.
+  const [channelMemberships, conversationMemberships] = await Promise.all([
+    prisma.channelMember.findMany({
+      where: {
+        userId,
+        isActive: true,
+        channel: {
+          deletedAt: null,
+          OR: [
+            { workspaceId },
+            {
+              workspaceId: { not: workspaceId },
+              OR: [
+                {
+                  collaboration: {
+                    status: 'ACTIVE',
+                    OR: [{ workspaceAId: workspaceId }, { workspaceBId: workspaceId }],
+                  },
+                },
+                {
+                  group: {
+                    status: 'ACTIVE',
+                    memberships: { some: { workspaceId, status: 'ACTIVE' } },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      select: { channelId: true },
+    }),
+    prisma.conversationParticipant.findMany({
+      where: { userId, isActive: true, conversation: { workspaceId } },
+      select: { conversationId: true },
+    }),
+  ]);
+
+  const channelIds = channelMemberships.map((m) => m.channelId);
+  const conversationIds = conversationMemberships.map((m) => m.conversationId);
+
+  if (channelIds.length === 0 && conversationIds.length === 0) {
+    return [];
+  }
+
   return prisma.huddleSession.findMany({
-    where: { workspaceId },
+    where: {
+      OR: [
+        ...(channelIds.length ? [{ channelId: { in: channelIds } }] : []),
+        ...(conversationIds.length ? [{ conversationId: { in: conversationIds } }] : []),
+      ],
+    },
     orderBy: { startedAt: 'desc' },
     take: limit,
     select: {

@@ -4,6 +4,9 @@ const createStreamRedisClientMock = vi.hoisted(() => vi.fn());
 const applyChannelMembershipUpdateMock = vi.hoisted(() => vi.fn());
 const applyConversationMembershipUpdateMock = vi.hoisted(() => vi.fn());
 const invalidateMembershipCacheForWorkspacesMock = vi.hoisted(() => vi.fn());
+const kickPeerFromCallServiceMock = vi.hoisted(() => vi.fn());
+const revokeUserChannelAccessMock = vi.hoisted(() => vi.fn());
+const revokeUserConversationAccessMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../src/config/redis.js', () => ({
   createStreamRedisClient: createStreamRedisClientMock,
@@ -29,6 +32,15 @@ vi.mock('../src/services/socket-membership-cache.service.js', () => ({
   applyChannelMembershipUpdate: applyChannelMembershipUpdateMock,
   applyConversationMembershipUpdate: applyConversationMembershipUpdateMock,
   invalidateMembershipCacheForWorkspaces: invalidateMembershipCacheForWorkspacesMock,
+}));
+
+vi.mock('../src/services/call-kick.service.js', () => ({
+  kickPeerFromCallService: kickPeerFromCallServiceMock,
+}));
+
+vi.mock('../src/websocket/index.js', () => ({
+  revokeUserChannelAccess: revokeUserChannelAccessMock,
+  revokeUserConversationAccess: revokeUserConversationAccessMock,
 }));
 
 describe('streams-consumer.service', () => {
@@ -83,7 +95,64 @@ describe('streams-consumer.service', () => {
     });
 
     expect(applyChannelMembershipUpdateMock).toHaveBeenCalledWith('u1', 'ch-1', 'add');
+    expect(revokeUserChannelAccessMock).not.toHaveBeenCalled();
+    expect(kickPeerFromCallServiceMock).not.toHaveBeenCalled();
     expect(client.xAck).toHaveBeenCalledWith('user-events', 'group-1', '2-0');
+  });
+
+  it('revokes socket privileges and kicks SFU peer when channel membership is removed', async () => {
+    const io = { emit: vi.fn(), to: vi.fn(() => ({ emit: vi.fn() })) } as any;
+    const client = {
+      set: vi.fn().mockResolvedValue('OK'),
+      xAck: vi.fn().mockResolvedValue(1),
+    };
+
+    const service = await import('../src/services/streams-consumer.service.js');
+    service.setBroadcastIo(io);
+
+    await service.__streamsTestUtils.processStreamMessage(client as any, 'user-events', {
+      id: '2-1',
+      message: {
+        eventId: 'evt-2b',
+        type: 'membership.channel.updated',
+        payload: JSON.stringify({
+          data: { userId: 'u1', channelId: 'ch-1', action: 'remove' },
+        }),
+      },
+    });
+
+    expect(applyChannelMembershipUpdateMock).toHaveBeenCalledWith('u1', 'ch-1', 'remove');
+    expect(revokeUserChannelAccessMock).toHaveBeenCalledWith('u1', 'ch-1');
+    expect(kickPeerFromCallServiceMock).toHaveBeenCalledWith({ userId: 'u1', channelId: 'ch-1' });
+  });
+
+  it('revokes socket privileges and kicks SFU peer when conversation membership is removed', async () => {
+    const io = { emit: vi.fn(), to: vi.fn(() => ({ emit: vi.fn() })) } as any;
+    const client = {
+      set: vi.fn().mockResolvedValue('OK'),
+      xAck: vi.fn().mockResolvedValue(1),
+    };
+
+    const service = await import('../src/services/streams-consumer.service.js');
+    service.setBroadcastIo(io);
+
+    await service.__streamsTestUtils.processStreamMessage(client as any, 'user-events', {
+      id: '2-2',
+      message: {
+        eventId: 'evt-2c',
+        type: 'membership.conversation.updated',
+        payload: JSON.stringify({
+          data: { userId: 'u1', conversationId: 'dm-1', action: 'remove' },
+        }),
+      },
+    });
+
+    expect(applyConversationMembershipUpdateMock).toHaveBeenCalledWith('u1', 'dm-1', 'remove');
+    expect(revokeUserConversationAccessMock).toHaveBeenCalledWith('u1', 'dm-1');
+    expect(kickPeerFromCallServiceMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      conversationId: 'dm-1',
+    });
   });
 
   it('invalidates membership cache and fans out collaboration updates to all workspaces', async () => {

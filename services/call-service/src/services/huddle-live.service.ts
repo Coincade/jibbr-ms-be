@@ -25,6 +25,71 @@ export const assertWorkspaceMember = async (
   }
 };
 
+/**
+ * Channels the user may see Jabbr presence for in this workspace context —
+ * mirrors messaging-service channel list (local + active collab/group shared channels).
+ * Never includes channels the user is not a member of.
+ */
+const listVisibleChannelMemberships = async (
+  workspaceId: string,
+  userId: string
+): Promise<Array<{ channelId: string; name: string | null }>> => {
+  const channels = await prisma.channel.findMany({
+    where: {
+      deletedAt: null,
+      isBridgeChannel: false,
+      members: {
+        some: {
+          userId,
+          isActive: true,
+        },
+      },
+      OR: [
+        {
+          AND: [
+            { workspaceId },
+            {
+              OR: [
+                { collaborationId: null, groupId: null },
+                { collaboration: { status: 'ACTIVE' } },
+                { group: { status: 'ACTIVE' } },
+              ],
+            },
+          ],
+        },
+        {
+          AND: [
+            { workspaceId: { not: workspaceId } },
+            {
+              OR: [
+                {
+                  collaboration: {
+                    status: 'ACTIVE',
+                    OR: [{ workspaceAId: workspaceId }, { workspaceBId: workspaceId }],
+                  },
+                },
+                {
+                  group: {
+                    status: 'ACTIVE',
+                    memberships: {
+                      some: {
+                        workspaceId,
+                        status: 'ACTIVE',
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    select: { id: true, name: true },
+  });
+  return channels.map((c) => ({ channelId: c.id, name: c.name }));
+};
+
 export const listLiveHuddlesForWorkspace = async (
   workspaceId: string,
   userId: string
@@ -32,10 +97,7 @@ export const listLiveHuddlesForWorkspace = async (
   await assertWorkspaceMember(userId, workspaceId);
 
   const [channelMemberships, conversationMemberships] = await Promise.all([
-    prisma.channelMember.findMany({
-      where: { userId, isActive: true, channel: { workspaceId } },
-      select: { channelId: true },
-    }),
+    listVisibleChannelMemberships(workspaceId, userId),
     prisma.conversationParticipant.findMany({
       where: { userId, isActive: true, conversation: { workspaceId } },
       select: { conversationId: true },
@@ -47,22 +109,16 @@ export const listLiveHuddlesForWorkspace = async (
     ...conversationMemberships.map((m) => `conv:${m.conversationId}`),
   ]);
 
-  const channelIds = channelMemberships.map((m) => m.channelId);
-  const channels =
-    channelIds.length > 0
-      ? await prisma.channel.findMany({
-          where: { id: { in: channelIds } },
-          select: { id: true, name: true },
-        })
-      : [];
-  const channelNameById = new Map(channels.map((c) => [c.id, c.name]));
+  const channelNameById = new Map(
+    channelMemberships.map((c) => [c.channelId, c.name] as const)
+  );
 
   const items: LiveHuddleItem[] = [];
 
   for (const roomId of getActiveRoomIds()) {
     if (!allowedRoomIds.has(roomId)) continue;
     const snapshot = getRoomSnapshot(roomId);
-    if (!snapshot) continue;
+    if (!snapshot || snapshot.participantCount <= 0) continue;
 
     const conversationId = conversationIdFromRoom(roomId);
     const channelId = conversationId ? null : roomId;

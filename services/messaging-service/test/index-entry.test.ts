@@ -28,7 +28,10 @@ const {
   });
   const createServer = vi.fn(() => ({ listen }));
   const createMessagingApp = vi.fn(() => ({ use, get }));
-  const prismaMock = { $connect: vi.fn().mockResolvedValue(undefined) };
+  const prismaMock = {
+    $connect: vi.fn().mockResolvedValue(undefined),
+    user: { findUnique: vi.fn().mockResolvedValue({ tokenVersion: 0 }) },
+  };
   const initMembershipOutbox = vi.fn().mockResolvedValue(undefined);
   const startMembershipOutboxRelay = vi.fn();
   const startMembershipOutboxCleanup = vi.fn();
@@ -51,6 +54,9 @@ const {
 vi.mock('dotenv', () => ({ default: { config: vi.fn() } }));
 vi.mock('http', () => ({ createServer }));
 vi.mock('@jibbr/logger', () => ({ Logger }));
+vi.mock('@jibbr/auth-middleware', () => ({
+  setTokenVersionLookup: vi.fn(),
+}));
 vi.mock('../src/config/database.js', () => ({ default: prismaMock }));
 vi.mock('../src/app.js', () => ({ createMessagingApp }));
 vi.mock('../src/routes/message.route.js', () => ({ default: (_req: unknown, _res: unknown, next: () => void) => next() }));

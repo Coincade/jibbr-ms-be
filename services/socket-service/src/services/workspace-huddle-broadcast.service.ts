@@ -8,6 +8,10 @@ export const setWorkspaceHuddleIo = (io: IoLike): void => {
   ioRef = io;
 };
 
+/**
+ * @deprecated Prefer broadcastChannelHuddleUpdate — workspace-wide fanout leaks
+ * Jabbr presence to non-channel members (esp. collab / private / org channels).
+ */
 export const broadcastWorkspaceHuddleUpdate = (
   workspaceId: string,
   data: Record<string, unknown>
@@ -48,32 +52,73 @@ export const resolveWorkspaceIdForConversation = async (
   return conv?.workspaceId ?? null;
 };
 
+const listActiveChannelMemberIds = async (channelId: string): Promise<string[]> => {
+  const members = await prisma.channelMember.findMany({
+    where: { channelId, isActive: true },
+    select: { userId: true },
+  });
+  return members.map((m) => m.userId);
+};
+
+/**
+ * Channel Jabbr updates go only to channel members (channel room + personal rooms).
+ * Never the whole workspace — non-members in collab workspaces must not see/join.
+ */
+export const broadcastChannelHuddleUpdate = (
+  channelId: string,
+  workspaceId: string,
+  data: Record<string, unknown>,
+  memberUserIds?: string[]
+): void => {
+  if (!ioRef) return;
+  const payload = {
+    workspaceId,
+    channelId,
+    roomId: channelId,
+    ...data,
+  };
+
+  // Anyone currently joined to the channel socket room
+  ioRef.to(channelId).emit('workspace_huddle_updated', payload);
+
+  // Online members who may not have join_channel'd yet (personal rooms)
+  if (memberUserIds?.length) {
+    for (const userId of memberUserIds) {
+      ioRef.to(`user_${userId}`).emit('workspace_huddle_updated', payload);
+    }
+  }
+};
+
 export const fanoutWorkspaceHuddleFromChannel = async (
   channelId: string,
   patch: Record<string, unknown>
 ): Promise<void> => {
   const workspaceId = await resolveWorkspaceIdForChannel(channelId);
   if (!workspaceId) return;
-  broadcastWorkspaceHuddleUpdate(workspaceId, {
-    channelId,
-    roomId: channelId,
-    ...patch,
-  });
+  const memberUserIds = await listActiveChannelMemberIds(channelId);
+  broadcastChannelHuddleUpdate(channelId, workspaceId, patch, memberUserIds);
 };
 
-/** DM Jabbr updates go only to conversation participants (not the whole workspace). */
+/** DM Jabbr updates go only to conversation participants (conversation + personal rooms). */
 export const broadcastConversationHuddleUpdate = (
   conversationId: string,
   workspaceId: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  memberUserIds?: string[]
 ): void => {
   if (!ioRef) return;
-  ioRef.to(conversationId).emit('workspace_huddle_updated', {
+  const payload = {
     workspaceId,
     conversationId,
     roomId: `conv:${conversationId}`,
     ...data,
-  });
+  };
+  ioRef.to(conversationId).emit('workspace_huddle_updated', payload);
+  if (memberUserIds?.length) {
+    for (const userId of memberUserIds) {
+      ioRef.to(`user_${userId}`).emit('workspace_huddle_updated', payload);
+    }
+  }
 };
 
 export const fanoutWorkspaceHuddleFromConversation = async (
@@ -82,5 +127,14 @@ export const fanoutWorkspaceHuddleFromConversation = async (
 ): Promise<void> => {
   const workspaceId = await resolveWorkspaceIdForConversation(conversationId);
   if (!workspaceId) return;
-  broadcastConversationHuddleUpdate(conversationId, workspaceId, patch);
+  const members = await prisma.conversationParticipant.findMany({
+    where: { conversationId, isActive: true },
+    select: { userId: true },
+  });
+  broadcastConversationHuddleUpdate(
+    conversationId,
+    workspaceId,
+    patch,
+    members.map((m) => m.userId)
+  );
 };

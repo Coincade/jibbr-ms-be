@@ -50,6 +50,15 @@ void (async () => {
     import('./services/membership-outbox.service.js'),
   ]);
 
+  const { setTokenVersionLookup } = await import('@jibbr/auth-middleware');
+  setTokenVersionLookup(async (userId: string) => {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { tokenVersion: true },
+    });
+    return user ? (user.tokenVersion ?? 0) : null;
+  });
+
   let dbConnected = false;
   let lastDbErrorLogAt = 0;
 

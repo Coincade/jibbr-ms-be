@@ -10,7 +10,14 @@ const PrismaClient = vi.hoisted(() =>
   })
 );
 
+const prismaMock = vi.hoisted(() => ({
+  user: {
+    findUnique: vi.fn(async () => ({ tokenVersion: 0 })),
+  },
+}));
+
 vi.mock('jsonwebtoken', () => ({ default: { verify }, verify }));
+vi.mock('../src/config/database.js', () => ({ default: prismaMock }));
 vi.mock('../src/services/socket-membership-cache.service.js', () => ({
   validateChannelMembershipCached,
   validateConversationParticipationCached,
@@ -35,18 +42,25 @@ describe('websocket utils', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.JWT_SECRET = 'secret';
+    prismaMock.user.findUnique.mockResolvedValue({ tokenVersion: 0 });
   });
 
-  it('authenticateSocket returns decoded payload', () => {
-    verify.mockReturnValue({ id: 'u1' });
-    expect(authenticateSocket('token')).toEqual({ id: 'u1' });
+  it('authenticateSocket returns decoded payload', async () => {
+    verify.mockReturnValue({ id: 'u1', tv: 0 });
+    await expect(authenticateSocket('token')).resolves.toEqual({ id: 'u1', tv: 0 });
   });
 
-  it('authenticateSocket returns null on verify error', () => {
+  it('authenticateSocket returns null on verify error', async () => {
     verify.mockImplementation(() => {
       throw new Error('bad');
     });
-    expect(authenticateSocket('bad')).toBeNull();
+    await expect(authenticateSocket('bad')).resolves.toBeNull();
+  });
+
+  it('authenticateSocket returns null when tokenVersion mismatches', async () => {
+    verify.mockReturnValue({ id: 'u1', tv: 0 });
+    prismaMock.user.findUnique.mockResolvedValue({ tokenVersion: 3 });
+    await expect(authenticateSocket('token')).resolves.toBeNull();
   });
 
   it('adds and removes client from channel map', () => {

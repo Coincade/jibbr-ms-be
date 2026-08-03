@@ -224,6 +224,7 @@ describe('message/direct handlers - critical error paths', () => {
     prisma.message.findUnique.mockResolvedValueOnce({
       id: 'm1',
       userId: 'u1',
+      channelId: 'c1',
       deletedAt: new Date(),
     });
 

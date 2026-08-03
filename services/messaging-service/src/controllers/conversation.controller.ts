@@ -7,7 +7,7 @@ import {
 } from "../helper.js";
 import { Request, Response } from "express";
 import prisma from "../config/database.js";
-import { uploadToSpaces, deleteFromSpaces } from "../config/upload.js";
+import { uploadToSpaces, deleteFromSpaces, signMessagesAttachments, signMessageAttachments } from "../config/upload.js";
 import { z, ZodError } from "zod";
 import {
   publishMessageCreatedEvent,
@@ -506,11 +506,7 @@ export const getConversationMessages = async (req: Request, res: Response) => {
     });
     countMs = Date.now() - countStartAt;
     const nextCursor = messages.length > 0 ? messages[messages.length - 1].createdAt.toISOString() : null;
-
-    return res.status(200).json({
-      message: "Messages fetched successfully",
-      data: {
-        messages: messages.map(msg => ({
+    const mapped = messages.map(msg => ({
           ...msg,
           createdAt: msg.createdAt.toISOString(),
           updatedAt: msg.updatedAt.toISOString(),
@@ -522,7 +518,13 @@ export const getConversationMessages = async (req: Request, res: Response) => {
             ...attachment,
             createdAt: attachment.createdAt.toISOString()
           }))
-        })),
+        }));
+    const signedMessages = await signMessagesAttachments(mapped);
+
+    return res.status(200).json({
+      message: "Messages fetched successfully",
+      data: {
+        messages: signedMessages,
         nextCursor,
         pagination: {
           page: Number(page),
@@ -641,7 +643,7 @@ export const sendDirectMessage = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       message: "Direct message sent successfully",
-      data: {
+      data: await signMessageAttachments({
         ...message,
         createdAt: message.createdAt.toISOString(),
         updatedAt: message.updatedAt.toISOString(),
@@ -653,7 +655,7 @@ export const sendDirectMessage = async (req: Request, res: Response) => {
           ...attachment,
           createdAt: attachment.createdAt.toISOString()
         }))
-      }
+      })
     });
   } catch (error) {
     console.error('Error in sendDirectMessage:', error);
@@ -948,7 +950,7 @@ export const sendDirectMessageWithAttachments = async (req: Request, res: Respon
 
     return res.status(201).json({
       message: "Direct message sent successfully",
-      data: {
+      data: await signMessageAttachments({
         ...message,
         createdAt: message.createdAt.toISOString(),
         updatedAt: message.updatedAt.toISOString(),
@@ -960,7 +962,7 @@ export const sendDirectMessageWithAttachments = async (req: Request, res: Respon
           ...attachment,
           createdAt: attachment.createdAt.toISOString()
         }))
-      }
+      })
     });
   } catch (error) {
     console.error('Error in sendDirectMessageWithAttachments:', error);

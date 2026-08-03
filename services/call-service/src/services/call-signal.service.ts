@@ -135,7 +135,9 @@ export const emitWorkspaceHuddleUpdate = async (
       ? data.roomId
       : typeof data.conversationId === 'string'
         ? `conv:${data.conversationId}`
-        : undefined;
+        : typeof data.channelId === 'string'
+          ? data.channelId
+          : undefined;
 
   // Direct Jabbr: discovery + state patches only to conversation participants.
   if (roomId && isConversationRoom(roomId)) {
@@ -146,12 +148,20 @@ export const emitWorkspaceHuddleUpdate = async (
     return;
   }
 
+  // Channel Jabbr: socket-service fans out only to channel members (not whole workspace).
+  const channelId =
+    typeof data.channelId === 'string'
+      ? data.channelId
+      : roomId && !isConversationRoom(roomId)
+        ? roomId
+        : undefined;
+
   await postWithRetry(
     '/internal/call/broadcast-workspace',
     {
       workspaceId,
       event: 'workspace_huddle_updated',
-      data: { workspaceId, ...data },
+      data: { workspaceId, channelId, ...data },
     },
     'broadcast-workspace'
   );

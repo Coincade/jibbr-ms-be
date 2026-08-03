@@ -14,6 +14,7 @@ import {
   applyConversationMembershipUpdate,
   invalidateMembershipCacheForWorkspaces,
 } from './socket-membership-cache.service.js';
+import { kickPeerFromCallService } from './call-kick.service.js';
 
 type StreamMessage = {
   id: string;
@@ -89,6 +90,14 @@ const shouldProcessEvent = async (
   return result === 'OK';
 };
 
+const clearDedupeKey = async (client: StreamRedisClient, eventId: string): Promise<void> => {
+  try {
+    await client.del(`dedupe:${eventId}`);
+  } catch {
+    // ignore
+  }
+};
+
 const processStreamMessage = async (
   client: StreamRedisClient,
   streamName: string,
@@ -98,32 +107,40 @@ const processStreamMessage = async (
 
   const isNew = await shouldProcessEvent(client, event.eventId);
   if (!isNew) {
+    // Only ACK duplicates when a prior successful processing left the done marker.
+    // If a failed attempt set NX then threw, clearDedupeKey removed it so redelivery can retry.
     await client.xAck(streamName, STREAMS_GROUP, entry.id);
     console.log('[Streams] Duplicate event skipped:', event.eventId);
     return;
   }
 
-  switch (streamName) {
-    case STREAMS.MESSAGES:
-      await handleMessageEvent(event);
-      break;
-    case STREAMS.NOTIFICATIONS:
-      await handleNotificationEvent(event);
-      break;
-    case STREAMS.USER_EVENTS:
-      await handleUserEvent(event);
-      break;
-    case STREAMS.WORKSPACE_EVENTS:
-      await handleWorkspaceEvent(event);
-      break;
-    case STREAMS.CHANNEL_EVENTS:
-      await handleChannelEvent(event);
-      break;
-    default:
-      console.warn('[Streams] Unknown stream:', streamName);
-  }
+  try {
+    switch (streamName) {
+      case STREAMS.MESSAGES:
+        await handleMessageEvent(event);
+        break;
+      case STREAMS.NOTIFICATIONS:
+        await handleNotificationEvent(event);
+        break;
+      case STREAMS.USER_EVENTS:
+        await handleUserEvent(event);
+        break;
+      case STREAMS.WORKSPACE_EVENTS:
+        await handleWorkspaceEvent(event);
+        break;
+      case STREAMS.CHANNEL_EVENTS:
+        await handleChannelEvent(event);
+        break;
+      default:
+        console.warn('[Streams] Unknown stream:', streamName);
+    }
 
-  await client.xAck(streamName, STREAMS_GROUP, entry.id);
+    await client.xAck(streamName, STREAMS_GROUP, entry.id);
+  } catch (error) {
+    // Allow redelivery: drop dedupe key so the next claim is not treated as a permanent duplicate.
+    await clearDedupeKey(client, event.eventId);
+    throw error;
+  }
 };
 
 const claimStaleMessages = async (
@@ -333,6 +350,12 @@ async function handleUserEvent(event: StreamEvent) {
       const channelId = data.channelId as string | undefined;
       if (!action || !userId || !channelId) break;
       await applyChannelMembershipUpdate(userId, channelId, action);
+      if (action === 'remove') {
+        // Dynamic import avoids circular init with websocket → streams-consumer.
+        const { revokeUserChannelAccess } = await import('../websocket/index.js');
+        revokeUserChannelAccess(userId, channelId);
+        void kickPeerFromCallService({ userId, channelId });
+      }
       break;
     }
     case 'membership.conversation.updated': {
@@ -341,6 +364,11 @@ async function handleUserEvent(event: StreamEvent) {
       const conversationId = data.conversationId as string | undefined;
       if (!action || !userId || !conversationId) break;
       await applyConversationMembershipUpdate(userId, conversationId, action);
+      if (action === 'remove') {
+        const { revokeUserConversationAccess } = await import('../websocket/index.js');
+        revokeUserConversationAccess(userId, conversationId);
+        void kickPeerFromCallService({ userId, conversationId });
+      }
       break;
     }
     case 'user.created':

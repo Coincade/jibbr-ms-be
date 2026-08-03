@@ -211,29 +211,56 @@ export const handleSendMessage = async (
     };
 
     // OPTIMIZATION: Create message with minimal includes for faster DB write
-    const message = await prisma.message.create({
-      data: messageData,
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-          },
+    const messageInclude = {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          image: true,
         },
-        replyTo: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-              },
+      },
+      replyTo: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
             },
           },
         },
-        // Don't include attachments/reactions/mentions here - we'll add them after
       },
-    });
+    } as const;
+
+    let message;
+    try {
+      message = await prisma.message.create({
+        data: messageData,
+        include: messageInclude,
+      });
+    } catch (createError: any) {
+      // Concurrent retries with the same clientMessageId — return the winner's row.
+      if (createError?.code === 'P2002' && payload.clientMessageId) {
+        const existing = await prisma.message.findFirst({
+          where: {
+            userId: socket.data.user.id,
+            clientMessageId: payload.clientMessageId,
+            deletedAt: null,
+          },
+          include: messageInclude,
+        });
+        if (existing) {
+          socket.emit('message_sent', {
+            id: existing.id,
+            clientMessageId: payload.clientMessageId,
+            channelId: existing.channelId,
+            conversationId: existing.conversationId,
+            createdAt: existing.createdAt.toISOString(),
+          });
+          return;
+        }
+      }
+      throw createError;
+    }
 
     // When this is a thread reply, mark parent message as thread so all clients show thread UI (reply count, Tangent link)
     let parentMessageUpdated: { id: string; isThread: true } | undefined;
@@ -463,15 +490,21 @@ export const handleEditMessage = async (
       throw new Error('Message not found');
     }
 
+    if (message.channelId !== data.channelId) {
+      throw new Error('Message does not belong to this channel');
+    }
+
     if (message.userId !== socket.data.user.id) {
       throw new Error('You can only edit your own messages');
     }
+
+    const channelId = message.channelId!;
 
     // [mentions] Process mentions in updated content
     const { sanitizedContent, mentionedUserIds } = await processMentions(
       payload.content,
       socket.data.user.id,
-      message.channelId,
+      channelId,
       (data as any).jsonContent // Optional JSON content from TipTap
     );
 
@@ -484,14 +517,14 @@ export const handleEditMessage = async (
     // [mentions] Update mentions (remove old, add new)
     await updateMentionsForMessage(
       data.messageId,
-      message.channelId,
+      channelId,
       mentionedUserIds,
       socket.data.user.id,
       io
     );
 
-    // Broadcast to channel using Socket.IO
-    socket.to(data.channelId!).emit('message_edited', {
+    // Broadcast to the message's channel (never trust client-supplied room alone)
+    socket.to(channelId).emit('message_edited', {
       messageId: data.messageId,
       content: contentForDb,
     });
@@ -500,7 +533,7 @@ export const handleEditMessage = async (
       socket.emit('message_edited_ack', {
         clientOpId: payload.clientOpId,
         messageId: data.messageId,
-        channelId: data.channelId,
+        channelId,
       });
     }
 
@@ -564,9 +597,15 @@ export const handleDeleteMessage = async (
       throw new Error('Message not found');
     }
 
+    if (message.channelId !== data.channelId) {
+      throw new Error('Message does not belong to this channel');
+    }
+
     if (message.userId !== socket.data.user.id) {
       throw new Error('You can only delete your own messages');
     }
+
+    const channelId = message.channelId!;
 
     // Check if message is already deleted
     if (message.deletedAt) {
@@ -574,7 +613,7 @@ export const handleDeleteMessage = async (
         socket.emit('message_deleted_ack', {
           clientOpId: (data as any).clientOpId,
           messageId: data.messageId,
-          channelId: data.channelId,
+          channelId,
           noop: true,
         });
         return;
@@ -588,8 +627,8 @@ export const handleDeleteMessage = async (
       data: { deletedAt: new Date() },
     });
 
-    // Broadcast to channel using Socket.IO
-    socket.to(data.channelId!).emit('message_deleted', {
+    // Broadcast to the message's channel (never trust client-supplied room alone)
+    socket.to(channelId).emit('message_deleted', {
       messageId: data.messageId,
     });
 
@@ -597,7 +636,7 @@ export const handleDeleteMessage = async (
       socket.emit('message_deleted_ack', {
         clientOpId: (data as any).clientOpId,
         messageId: data.messageId,
-        channelId: data.channelId,
+        channelId,
       });
     }
 

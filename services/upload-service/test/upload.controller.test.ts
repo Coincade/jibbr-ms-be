@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const uploadToSpaces = vi.hoisted(() => vi.fn());
+const getSignedSpacesUrl = vi.hoisted(() => vi.fn());
 
 vi.mock('../src/config/upload.js', () => ({
   uploadToSpaces,
+  getSignedSpacesUrl,
+  deleteFromSpaces: vi.fn(),
 }));
 
 import {
@@ -30,9 +33,10 @@ describe('upload.controller', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('uploadFiles returns uploaded file payload', async () => {
+  it('uploadFiles returns uploaded file payload with signed + storage URLs', async () => {
     const res = createRes();
     uploadToSpaces.mockResolvedValueOnce('https://cdn.example.com/f1');
+    getSignedSpacesUrl.mockResolvedValueOnce('https://cdn.example.com/f1?X-Amz-Signature=abc');
     await uploadFiles(
       {
         files: [{ originalname: 'a.txt', mimetype: 'text/plain', size: 10, buffer: Buffer.from('a') }],
@@ -42,7 +46,14 @@ describe('upload.controller', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { files: [expect.objectContaining({ url: 'https://cdn.example.com/f1' })] },
+        data: {
+          files: [
+            expect.objectContaining({
+              url: 'https://cdn.example.com/f1?X-Amz-Signature=abc',
+              storageUrl: 'https://cdn.example.com/f1',
+            }),
+          ],
+        },
       })
     );
   });
@@ -79,12 +90,23 @@ describe('upload.controller', () => {
   it('uploadProfilePictureFile uploads valid image', async () => {
     const res = createRes();
     uploadToSpaces.mockResolvedValueOnce('https://cdn.example.com/profile/u1.png');
+    getSignedSpacesUrl.mockResolvedValueOnce(
+      'https://cdn.example.com/profile/u1.png?X-Amz-Signature=abc'
+    );
     await uploadProfilePictureFile(
       { file: { mimetype: 'image/png', originalname: 'u1.png', buffer: Buffer.from('x') } } as any,
       res
     );
     expect(uploadToSpaces).toHaveBeenCalledWith(expect.any(Object), 'profile-pictures');
     expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          url: 'https://cdn.example.com/profile/u1.png?X-Amz-Signature=abc',
+          storageUrl: 'https://cdn.example.com/profile/u1.png',
+        },
+      })
+    );
   });
 
   it('uploadProfilePictureFile returns storage-not-configured message on config errors', async () => {

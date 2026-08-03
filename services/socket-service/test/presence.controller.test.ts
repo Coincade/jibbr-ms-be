@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const getOnlineUsers = vi.hoisted(() => vi.fn(() => ['u1', 'u2']));
-const isUserOnline = vi.hoisted(() => vi.fn(() => true));
-const getUsersOnlineStatus = vi.hoisted(() => vi.fn(() => ({ u1: true, u2: false })));
-const getOnlineUsersCount = vi.hoisted(() => vi.fn(() => 2));
+const getOnlineUsers = vi.hoisted(() => vi.fn(async () => ['u1', 'u2']));
+const isUserOnline = vi.hoisted(() => vi.fn(async () => true));
+const getUsersOnlineStatus = vi.hoisted(() => vi.fn(async () => ({ u1: true, u2: false })));
+const getOnlineUsersCount = vi.hoisted(() => vi.fn(async () => 2));
 
 vi.mock('../src/websocket/index.js', () => ({
   getOnlineUsers,

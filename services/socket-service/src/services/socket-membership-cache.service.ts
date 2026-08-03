@@ -4,7 +4,7 @@ import { retryWithBackoff } from '../libs/retry.js';
 import { realtimeMetrics } from './realtime-observability.service.js';
 
 const KEY_TTL_SECONDS = Number.parseInt(process.env.SOCKET_MEMBERSHIP_TTL_SECONDS || '900', 10);
-const DB_FALLBACK_ENABLED = process.env.SOCKET_DB_FALLBACK_ENABLED === '1';
+const DB_FALLBACK_ENABLED = process.env.SOCKET_DB_FALLBACK_ENABLED !== '0';
 const FALLBACK_BREAKER_THRESHOLD = Number.parseInt(
   process.env.SOCKET_DB_FALLBACK_BREAKER_THRESHOLD || '20',
   10
@@ -177,9 +177,10 @@ export const validateChannelMembershipCached = async (userId: string, channelId:
   if (memorySet?.has(userId)) return true;
 
   const redisResult = await safeRedisMembershipCheck(channelMembersKey(channelId), userId);
-  if (redisResult !== null) {
-    if (redisResult) addToMemory(memoryChannelMembers, channelId, userId);
-    return redisResult;
+  // Trust Redis positives only. Miss/false can mean TTL eviction — confirm with DB (like workspace).
+  if (redisResult === true) {
+    addToMemory(memoryChannelMembers, channelId, userId);
+    return true;
   }
 
   return fallbackMembershipCheck(async () => {
@@ -187,6 +188,16 @@ export const validateChannelMembershipCached = async (userId: string, channelId:
       where: { channelId, userId, isActive: true },
       select: { id: true },
     });
+    if (member) {
+      addToMemory(memoryChannelMembers, channelId, userId);
+      try {
+        const client = await getStateRedisClient();
+        await client.sAdd(channelMembersKey(channelId), userId);
+        await client.expire(channelMembersKey(channelId), KEY_TTL_SECONDS);
+      } catch {
+        // ignore rewarm failures
+      }
+    }
     return !!member;
   });
 };
@@ -199,9 +210,9 @@ export const validateConversationParticipationCached = async (
   if (memorySet?.has(userId)) return true;
 
   const redisResult = await safeRedisMembershipCheck(conversationParticipantsKey(conversationId), userId);
-  if (redisResult !== null) {
-    if (redisResult) addToMemory(memoryConversationMembers, conversationId, userId);
-    return redisResult;
+  if (redisResult === true) {
+    addToMemory(memoryConversationMembers, conversationId, userId);
+    return true;
   }
 
   return fallbackMembershipCheck(async () => {
@@ -209,6 +220,16 @@ export const validateConversationParticipationCached = async (
       where: { conversationId, userId, isActive: true },
       select: { id: true },
     });
+    if (participant) {
+      addToMemory(memoryConversationMembers, conversationId, userId);
+      try {
+        const client = await getStateRedisClient();
+        await client.sAdd(conversationParticipantsKey(conversationId), userId);
+        await client.expire(conversationParticipantsKey(conversationId), KEY_TTL_SECONDS);
+      } catch {
+        // ignore rewarm failures
+      }
+    }
     return !!participant;
   });
 };

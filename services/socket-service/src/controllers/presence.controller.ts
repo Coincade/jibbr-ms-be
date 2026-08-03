@@ -13,7 +13,7 @@ export const getOnlineUsersList = async (req: Request, res: Response) => {
       return res.status(422).json({ message: 'User not found' });
     }
 
-    const onlineUsers = getOnlineUsers();
+    const onlineUsers = await getOnlineUsers();
 
     return res.status(200).json({
       message: 'Online users fetched successfully',
@@ -35,7 +35,7 @@ export const checkUserOnlineStatus = async (req: Request, res: Response) => {
     }
 
     const { userId } = req.params;
-    const online = isUserOnline(userId);
+    const online = await isUserOnline(userId);
 
     return res.status(200).json({
       message: 'User online status fetched successfully',
@@ -65,7 +65,7 @@ export const checkMultipleUsersStatus = async (
       return res.status(400).json({ message: 'userIds must be an array' });
     }
 
-    const statuses = getUsersOnlineStatus(userIds);
+    const statuses = await getUsersOnlineStatus(userIds);
 
     return res.status(200).json({
       message: 'Users online status fetched successfully',
@@ -83,7 +83,7 @@ export const getOnlineStats = async (req: Request, res: Response) => {
       return res.status(422).json({ message: 'User not found' });
     }
 
-    const onlineCount = getOnlineUsersCount();
+    const onlineCount = await getOnlineUsersCount();
 
     return res.status(200).json({
       message: 'Online stats fetched successfully',
@@ -95,5 +95,3 @@ export const getOnlineStats = async (req: Request, res: Response) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
-
-

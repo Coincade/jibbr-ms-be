@@ -126,6 +126,7 @@ export const login = async (req: Request, res: Response) => {
       id: user.id,
       name: user.name,
       email: user.email,
+      tv: user.tokenVersion ?? 0,
     };
 
     //Generate JWT Token
@@ -167,7 +168,106 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 export const logout = async (req: Request, res: Response) => {
-  res.send("Logged out successfully!");
+  try {
+    const authUser = req.user;
+    if (!authUser?.id) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    await prisma.user.update({
+      where: { id: authUser.id },
+      data: { tokenVersion: { increment: 1 } },
+    });
+
+    return res.status(200).json({ message: "Logged out successfully", revoked: true });
+  } catch (error) {
+    console.error("Error in logout controller:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Re-issue a JWT for a still-valid session (allows expired access tokens).
+ * Used by clients on cold start / 401 retry. Revoked sessions (tokenVersion bump) fail.
+ */
+export const refreshAccessToken = async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const raw = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : authHeader.split(" ")[1] || authHeader;
+    if (!raw) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    let decoded: { id: string; name?: string | null; email?: string; tv?: number; exp?: number };
+    try {
+      decoded = jwt.verify(raw, process.env.JWT_SECRET as string, {
+        ignoreExpiration: true,
+      }) as typeof decoded;
+    } catch {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!decoded?.id) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    // Reject tokens that expired more than 30 days ago (no indefinite refresh of ancient JWTs)
+    if (typeof decoded.exp === "number") {
+      const expiredAgoMs = Date.now() - decoded.exp * 1000;
+      const MAX_STALE_MS = 30 * 24 * 60 * 60 * 1000;
+      if (expiredAgoMs > MAX_STALE_MS) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        tokenVersion: true,
+        email_verified_at: true,
+        email_verify_token: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const claimedTv = typeof decoded.tv === "number" ? decoded.tv : 0;
+    if ((user.tokenVersion ?? 0) !== claimedTv) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const JWTPayload = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      tv: user.tokenVersion ?? 0,
+    };
+
+    const token = jwt.sign(JWTPayload, process.env.JWT_SECRET as string, {
+      expiresIn: "30d",
+    });
+
+    return res.status(200).json({
+      message: "Token refreshed",
+      data: {
+        ...JWTPayload,
+        token: `Bearer ${token}`,
+        emailVerified: !!user.email_verified_at,
+        emailVerifiedAt: user.email_verified_at,
+        hasVerificationToken: !!user.email_verify_token,
+      },
+    });
+  } catch (error) {
+    console.error("Error in refreshAccessToken controller:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 export const verifyEmail = async (req: Request, res: Response) => {
@@ -481,6 +581,7 @@ export const forgetResetPassword = async (req: Request, res: Response) => {
         password: newPass,
         password_reset_token: null,
         token_send_at: null,
+        tokenVersion: { increment: 1 },
       },
       where: { email: payload.email },
     });
@@ -547,6 +648,7 @@ export const resetPassword = async (req: Request, res: Response) => {
     await prisma.user.update({
       data: {
         password: newPass,
+        tokenVersion: { increment: 1 },
       },
       where: { email: payload.email },
     });

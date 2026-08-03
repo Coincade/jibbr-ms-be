@@ -23,8 +23,9 @@ import {
   listRecentHuddles,
   listChannelHuddleHistory,
 } from '../services/huddle-session.service.js';
-import { listLiveHuddlesForWorkspace } from '../services/huddle-live.service.js';
 import {
+  listLiveHuddlesForWorkspace,
+  assertWorkspaceMember,
   buildWorkspaceHuddlePayload,
   resolveWorkspaceIdForRoom,
 } from '../services/huddle-live.service.js';
@@ -74,6 +75,16 @@ const getUserId = (req: Request): string => {
   return user.id;
 };
 
+const isMembershipDeniedMessage = (message: string): boolean =>
+  message.includes('not a member') || message.includes('participant');
+
+const callErrorStatus = (error: unknown, fallback = 400): number => {
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'Unauthorized') return 401;
+  if (isMembershipDeniedMessage(message)) return 403;
+  return fallback;
+};
+
 const joinRoom = async (req: Request, res: Response, roomId: string): Promise<void> => {
   const userId = getUserId(req);
   await assertRoomMember(userId, roomId);
@@ -84,6 +95,9 @@ const joinRoom = async (req: Request, res: Response, roomId: string): Promise<vo
   let room = existing;
   if (!room) {
     room = await getOrCreateRoom(roomId, { hostUserId: userId });
+  }
+  // Single open session per room (idempotent under concurrent first joins).
+  if (!room.huddleDbId) {
     const huddleDbId = await startHuddleSessionRecord(roomId, userId, room.sessionId);
     if (huddleDbId) room.huddleDbId = huddleDbId;
   }
@@ -130,8 +144,7 @@ export const joinChannelCall = async (req: Request, res: Response): Promise<void
     await joinRoom(req, res, channelId);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to join call';
-    const status = message.includes('not a member') || message.includes('participant') ? 403 : 400;
-    res.status(status).json({ error: message });
+    res.status(callErrorStatus(error)).json({ error: message });
   }
 };
 
@@ -141,13 +154,13 @@ export const joinConversationCall = async (req: Request, res: Response): Promise
     await joinRoom(req, res, conversationRoomId(conversationId));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to join call';
-    const status = message.includes('participant') ? 403 : 400;
-    res.status(status).json({ error: message });
+    res.status(callErrorStatus(error)).json({ error: message });
   }
 };
 
 export const leaveRoomCall = async (req: Request, res: Response, roomId: string): Promise<void> => {
   const userId = getUserId(req);
+  await assertRoomMember(userId, roomId);
   const { roomEmptied } = await removePeer(roomId, userId);
   res.json({ ok: true, roomEmptied });
 };
@@ -157,7 +170,7 @@ export const leaveChannelCall = async (req: Request, res: Response): Promise<voi
     const { channelId } = z.object({ channelId: z.string().min(1) }).parse(req.params);
     await leaveRoomCall(req, res, channelId);
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to leave call',
     });
   }
@@ -168,7 +181,7 @@ export const leaveConversationCall = async (req: Request, res: Response): Promis
     const { conversationId } = z.object({ conversationId: z.string().min(1) }).parse(req.params);
     await leaveRoomCall(req, res, conversationRoomId(conversationId));
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to leave call',
     });
   }
@@ -192,7 +205,7 @@ export const getChannelCall = async (req: Request, res: Response): Promise<void>
     const { channelId } = z.object({ channelId: z.string().min(1) }).parse(req.params);
     await getRoomCall(req, res, channelId);
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to get call',
     });
   }
@@ -203,7 +216,7 @@ export const getConversationCall = async (req: Request, res: Response): Promise<
     const { conversationId } = z.object({ conversationId: z.string().min(1) }).parse(req.params);
     await getRoomCall(req, res, conversationRoomId(conversationId));
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to get call',
     });
   }
@@ -229,7 +242,7 @@ export const endChannelCall = async (req: Request, res: Response): Promise<void>
     await forceCloseRoom(channelId);
     res.json({ ok: true, ended: true, roomEmptied: true });
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to end call',
     });
   }
@@ -256,7 +269,7 @@ export const endConversationCall = async (req: Request, res: Response): Promise<
     await forceCloseRoom(roomId);
     res.json({ ok: true, ended: true, roomEmptied: true });
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to end call',
     });
   }
@@ -280,7 +293,7 @@ export const updateCallMediaState = async (req: Request, res: Response): Promise
       videoMuted: peer.videoMuted,
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to update media state',
     });
   }
@@ -288,14 +301,16 @@ export const updateCallMediaState = async (req: Request, res: Response): Promise
 
 export const listWorkspaceHuddleHistory = async (req: Request, res: Response): Promise<void> => {
   try {
+    const userId = getUserId(req);
     const { workspaceId } = z.object({ workspaceId: z.string().min(1) }).parse(req.params);
+    await assertWorkspaceMember(userId, workspaceId);
     const limit = z.coerce.number().min(1).max(50).optional().parse(req.query.limit ?? 20);
-    const sessions = await listRecentHuddles(workspaceId, limit);
+    const sessions = await listRecentHuddles(workspaceId, userId, limit);
     res.json({ sessions });
   } catch (error) {
-    res.status(400).json({
-      error: error instanceof Error ? error.message : 'Failed to list huddle history',
-    });
+    const message = error instanceof Error ? error.message : 'Failed to list huddle history';
+    const status = message.includes('not a member') ? 403 : 400;
+    res.status(status).json({ error: message });
   }
 };
 
@@ -340,7 +355,11 @@ export const createWebRtcTransport = async (req: Request, res: Response): Promis
       return;
     }
 
-    const peer = getOrCreatePeer(room, userId);
+    const peer = room.peers.get(userId);
+    if (!peer) {
+      res.status(404).json({ error: 'Peer not in call. Join the huddle before creating a transport.' });
+      return;
+    }
     const transport = await room.router.createWebRtcTransport(getWebRtcTransportOptions());
 
     transport.on('dtlsstatechange', (state) => {
@@ -362,7 +381,7 @@ export const createWebRtcTransport = async (req: Request, res: Response): Promis
       dtlsParameters: transport.dtlsParameters,
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to create transport',
     });
   }
@@ -374,6 +393,7 @@ export const connectWebRtcTransport = async (req: Request, res: Response): Promi
     const transportId = z.string().parse(req.params.transportId);
     const { channelId, dtlsParameters } = connectTransportBody.parse(req.body);
 
+    await assertRoomMember(userId, channelId);
     const room = getRoom(channelId);
     if (!room) {
       res.status(404).json({ error: 'No active call in this room' });
@@ -401,7 +421,7 @@ export const connectWebRtcTransport = async (req: Request, res: Response): Promi
     await transport.connect({ dtlsParameters: dtlsParameters as any });
     res.json({ connected: true });
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to connect transport',
     });
   }
@@ -412,6 +432,7 @@ export const produce = async (req: Request, res: Response): Promise<void> => {
     const userId = getUserId(req);
     const { channelId, transportId, kind, rtpParameters, source } = produceBody.parse(req.body);
 
+    await assertRoomMember(userId, channelId);
     const room = getRoom(channelId);
     if (!room) {
       res.status(404).json({ error: 'No active call in this room' });
@@ -455,7 +476,7 @@ export const produce = async (req: Request, res: Response): Promise<void> => {
       ...(videoSource ? { source: videoSource } : {}),
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to produce',
     });
   }
@@ -466,6 +487,7 @@ export const consume = async (req: Request, res: Response): Promise<void> => {
     const userId = getUserId(req);
     const { channelId, transportId, producerId, rtpCapabilities } = consumeBody.parse(req.body);
 
+    await assertRoomMember(userId, channelId);
     const room = getRoom(channelId);
     if (!room) {
       res.status(404).json({ error: 'No active call in this room' });
@@ -509,7 +531,7 @@ export const consume = async (req: Request, res: Response): Promise<void> => {
       ...(source ? { source } : {}),
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to consume',
     });
   }
@@ -521,6 +543,7 @@ export const resumeConsumer = async (req: Request, res: Response): Promise<void>
     const consumerId = z.string().parse(req.params.consumerId);
     const channelId = z.string().parse(req.body?.channelId);
 
+    await assertRoomMember(userId, channelId);
     const room = getRoom(channelId);
     if (!room) {
       res.status(404).json({ error: 'No active call in this room' });
@@ -537,7 +560,7 @@ export const resumeConsumer = async (req: Request, res: Response): Promise<void>
     await consumer.resume();
     res.json({ resumed: true });
   } catch (error) {
-    res.status(400).json({
+    res.status(callErrorStatus(error)).json({
       error: error instanceof Error ? error.message : 'Failed to resume consumer',
     });
   }
@@ -551,6 +574,7 @@ export const pauseProducer = async (req: Request, res: Response): Promise<void> 
     const producerId = z.string().parse(req.params.producerId);
     const { channelId } = pauseResumeProducerBody.parse(req.body);
 
+    await assertRoomMember(userId, channelId);
     const room = getRoom(channelId);
     if (!room) { res.status(404).json({ error: 'No active call' }); return; }
 
@@ -561,7 +585,9 @@ export const pauseProducer = async (req: Request, res: Response): Promise<void> 
     await producer.pause();
     res.json({ paused: true });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to pause producer' });
+    res.status(callErrorStatus(error)).json({
+      error: error instanceof Error ? error.message : 'Failed to pause producer',
+    });
   }
 };
 
@@ -571,6 +597,7 @@ export const resumeProducer = async (req: Request, res: Response): Promise<void>
     const producerId = z.string().parse(req.params.producerId);
     const { channelId } = pauseResumeProducerBody.parse(req.body);
 
+    await assertRoomMember(userId, channelId);
     const room = getRoom(channelId);
     if (!room) { res.status(404).json({ error: 'No active call' }); return; }
 
@@ -581,7 +608,9 @@ export const resumeProducer = async (req: Request, res: Response): Promise<void>
     await producer.resume();
     res.json({ resumed: true });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to resume producer' });
+    res.status(callErrorStatus(error)).json({
+      error: error instanceof Error ? error.message : 'Failed to resume producer',
+    });
   }
 };
 
@@ -597,6 +626,7 @@ export const setConsumerLayers = async (req: Request, res: Response): Promise<vo
     const consumerId = z.string().parse(req.params.consumerId);
     const { channelId, spatialLayer, temporalLayer } = consumerLayersBody.parse(req.body);
 
+    await assertRoomMember(userId, channelId);
     const room = getRoom(channelId);
     if (!room) { res.status(404).json({ error: 'No active call' }); return; }
 
@@ -607,7 +637,9 @@ export const setConsumerLayers = async (req: Request, res: Response): Promise<vo
     await consumer.setPreferredLayers({ spatialLayer, temporalLayer: temporalLayer ?? spatialLayer });
     res.json({ ok: true, spatialLayer });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to set consumer layers' });
+    res.status(callErrorStatus(error)).json({
+      error: error instanceof Error ? error.message : 'Failed to set consumer layers',
+    });
   }
 };
 

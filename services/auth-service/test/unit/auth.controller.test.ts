@@ -277,11 +277,20 @@ describe('Auth Controller Testing', () => {
   });
 
   describe('logout', () => {
-    it('sends success message', async () => {
-      const req = createReq();
+    it('bumps tokenVersion and returns success json', async () => {
+      (prisma as any).user.update.mockResolvedValue({});
+      const req = createReq({ user: { id: 'u1' } });
       const res = createRes();
       await logout(req as any, res as any);
-      expect(res.send).toHaveBeenCalledWith('Logged out successfully!');
+      expect((prisma as any).user.update).toHaveBeenCalledWith({
+        where: { id: 'u1' },
+        data: { tokenVersion: { increment: 1 } },
+      });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        message: 'Logged out successfully',
+        revoked: true,
+      });
     });
   });
 

@@ -1,4 +1,4 @@
-import type { Server as HttpServer } from 'http';
+import type { Server as HttpServer, IncomingMessage } from 'http';
 import crypto from 'crypto';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { authenticateSocket } from './utils.js';
@@ -49,6 +49,25 @@ const sendJson = (ws: WebSocket, json: string) => {
   if (ws.readyState !== WebSocket.OPEN) return;
   if ((ws as any).bufferedAmount && (ws as any).bufferedAmount > 2_000_000) return;
   ws.send(json);
+};
+
+const mapAuthUser = (user: any): WsUser => ({
+  id: String(user.id),
+  name: user.name,
+  email: user.email,
+  image: user.image,
+});
+
+/** Prefer Sec-WebSocket-Protocol: `jibbr`, `<jwt>` (avoids putting JWT in URL/logs). */
+export const extractTokenFromProtocols = (req: IncomingMessage): string | null => {
+  const raw = req.headers['sec-websocket-protocol'];
+  if (!raw || typeof raw !== 'string') return null;
+  const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const jibbrIdx = parts.findIndex((p) => p.toLowerCase() === 'jibbr');
+  if (jibbrIdx < 0) return null;
+  const token = parts[jibbrIdx + 1];
+  return token || null;
 };
 
 class WsSocket implements SocketLike {
@@ -132,13 +151,23 @@ export function createWsServer(server: HttpServer): {
   createSocketFromWs: (ws: WebSocket) => WsSocket;
   getRoomMap: () => RoomMap;
   getAllClients: () => Set<WsSocket>;
-  authenticateFromRequestUrl: (requestUrl?: string | null) => WsUser | null;
+  authenticateFromRequestUrl: (requestUrl?: string | null) => Promise<WsUser | null>;
+  authenticateFromProtocols: (req: IncomingMessage) => Promise<WsUser | null>;
+  authenticateWithToken: (token: string) => Promise<WsUser | null>;
   parseIncomingFrame: (raw: RawData) => { type: string; data: any } | null;
 } {
   const roomMap: RoomMap = new Map();
   const allClients: Set<WsSocket> = new Set();
 
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({
+    server,
+    path: '/ws',
+    handleProtocols: (protocols) => {
+      // Echo `jibbr` so browsers accept the negotiated subprotocol.
+      if (protocols.has('jibbr')) return 'jibbr';
+      return false;
+    },
+  });
 
   const io: IoLike = {
     emit: (event: string, data: JsonRecord = {}) => {
@@ -162,20 +191,31 @@ export function createWsServer(server: HttpServer): {
     return sock;
   };
 
-  const authenticateFromRequestUrl = (requestUrl?: string | null): WsUser | null => {
+  const authenticateWithToken = async (token: string): Promise<WsUser | null> => {
+    if (!token) return null;
+    try {
+      const user = await authenticateSocket(token);
+      if (!user) return null;
+      return mapAuthUser(user);
+    } catch {
+      return null;
+    }
+  };
+
+  const authenticateFromProtocols = async (req: IncomingMessage): Promise<WsUser | null> => {
+    const token = extractTokenFromProtocols(req);
+    if (!token) return null;
+    return authenticateWithToken(token);
+  };
+
+  /** @deprecated Prefer Sec-WebSocket-Protocol or first-message auth. Kept for migration. */
+  const authenticateFromRequestUrl = async (requestUrl?: string | null): Promise<WsUser | null> => {
     if (!requestUrl) return null;
     try {
       const url = new URL(requestUrl, 'http://localhost');
       const token = url.searchParams.get('token');
       if (!token) return null;
-      const user = authenticateSocket(token);
-      if (!user) return null;
-      return {
-        id: String((user as any).id),
-        name: (user as any).name,
-        email: (user as any).email,
-        image: (user as any).image,
-      };
+      return authenticateWithToken(token);
     } catch {
       return null;
     }
@@ -197,7 +237,8 @@ export function createWsServer(server: HttpServer): {
     getRoomMap: () => roomMap,
     getAllClients: () => allClients,
     authenticateFromRequestUrl,
+    authenticateFromProtocols,
+    authenticateWithToken,
     parseIncomingFrame,
   };
 }
-

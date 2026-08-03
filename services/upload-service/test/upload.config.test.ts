@@ -7,6 +7,7 @@ afterEach(() => {
   delete process.env.DO_SPACES_KEY;
   delete process.env.DO_SPACES_SECRET;
   delete process.env.DO_SPACES_BUCKET;
+  delete process.env.DO_SPACES_CDN_ENDPOINT;
 });
 
 describe('config/upload', () => {
@@ -21,10 +22,8 @@ describe('config/upload', () => {
     ).rejects.toThrow('DO_SPACES_BUCKET environment variable is not set');
   });
 
-  it('uploadToSpaces resolves URL on success', async () => {
-    const send = vi.fn((cb: (err: unknown, result: { Location: string }) => void) =>
-      cb(null, { Location: 'https://cdn.example.com/attachments/f.txt' })
-    );
+  it('uploadToSpaces resolves permanent URL on success', async () => {
+    const send = vi.fn((cb: (err: unknown) => void) => cb(null));
     const upload = vi.fn(() => ({ send }));
     const deleteObject = vi.fn();
     const S3 = vi.fn(function MockS3() {
@@ -36,11 +35,19 @@ describe('config/upload', () => {
     vi.doMock('aws-sdk', () => ({ default: { S3, Endpoint }, S3, Endpoint }));
 
     process.env.DO_SPACES_BUCKET = 'bucket';
+    process.env.DO_SPACES_CDN_ENDPOINT = 'https://cdn.example.com';
     const { uploadToSpaces } = await import('../src/config/upload.js');
     const result = await uploadToSpaces(
       { originalname: 'a.txt', buffer: Buffer.from('x'), mimetype: 'text/plain' } as any
     );
-    expect(result).toBe('https://cdn.example.com/attachments/f.txt');
+    expect(result).toMatch(/^https:\/\/cdn\.example\.com\/attachments\/.+-a\.txt$/);
+    expect(upload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ACL: 'private',
+        Bucket: 'bucket',
+        ContentType: 'text/plain',
+      })
+    );
   });
 
   it('uploadToSpaces rejects when S3 upload callback returns error', async () => {
@@ -65,7 +72,7 @@ describe('config/upload', () => {
         buffer: Buffer.from('x'),
         mimetype: 'text/plain',
       } as any)
-    ).rejects.toThrow('s3 failed');
+    ).rejects.toThrow('Failed to upload file');
   });
 
   it('deleteFromSpaces throws when bucket env is missing', async () => {

@@ -35,6 +35,7 @@ model User {
   employeeId               String?                    @db.VarChar(64)
   birthday                 DateTime?
   designation              String?                    @db.VarChar(128)
+  tokenVersion             Int                         @default(0)
   createdAt                DateTime                    @default(now())
   image                    String?
   updatedAt                DateTime                    @default(now()) @updatedAt
@@ -175,6 +176,8 @@ model HuddleSession {
   @@index([workspaceId, startedAt])
   @@index([channelId])
   @@index([conversationId])
+  // Partial unique index (open sessions only) applied in migration:
+  // HuddleSession_roomId_open_uidx ON ("roomId") WHERE "endedAt" IS NULL
 }
 
 model Conversation {

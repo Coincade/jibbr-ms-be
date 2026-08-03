@@ -22,6 +22,19 @@ const start = async () => {
     initRedis();
     await initMediasoupWorkers();
     logIceServerStatus();
+
+    const [{ setTokenVersionLookup }, { default: prisma }] = await Promise.all([
+      import('@jibbr/auth-middleware'),
+      import('./config/database.js'),
+    ]);
+    setTokenVersionLookup(async (userId: string) => {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { tokenVersion: true },
+      });
+      return user ? (user.tokenVersion ?? 0) : null;
+    });
+
     const app = createCallApp();
 
     const server = app.listen(PORT, () => {

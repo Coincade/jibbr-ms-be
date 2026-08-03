@@ -23,8 +23,23 @@ export const handleAddReaction = async (
 
     await assertCanMutateSharedChannel(currentUserId, data.channelId!);
 
-    // Add reaction to database
     const { default: prisma } = await import('../../config/database.js');
+    const message = await prisma.message.findUnique({
+      where: { id: data.messageId },
+      select: { id: true, channelId: true, deletedAt: true },
+    });
+
+    if (!message || message.deletedAt) {
+      throw new Error('Message not found');
+    }
+
+    if (message.channelId !== data.channelId) {
+      throw new Error('Message does not belong to this channel');
+    }
+
+    const channelId = message.channelId!;
+
+    // Add reaction to database
     const reaction = await prisma.reaction.create({
       data: {
         emoji: data.emoji,
@@ -41,8 +56,8 @@ export const handleAddReaction = async (
       },
     });
 
-    // Broadcast to channel using Socket.IO
-    socket.to(data.channelId!).emit('reaction_added', {
+    // Broadcast to the message's channel (never trust client-supplied room alone)
+    socket.to(channelId).emit('reaction_added', {
       id: reaction.id,
       emoji: reaction.emoji,
       messageId: reaction.messageId,
@@ -132,8 +147,23 @@ export const handleRemoveReaction = async (
 
     await assertCanMutateSharedChannel(currentUserId, data.channelId!);
 
-    // Remove reaction from database
     const { default: prisma } = await import('../../config/database.js');
+    const message = await prisma.message.findUnique({
+      where: { id: data.messageId },
+      select: { id: true, channelId: true, deletedAt: true },
+    });
+
+    if (!message || message.deletedAt) {
+      throw new Error('Message not found');
+    }
+
+    if (message.channelId !== data.channelId) {
+      throw new Error('Message does not belong to this channel');
+    }
+
+    const channelId = message.channelId!;
+
+    // Remove reaction from database
     const reaction = await prisma.reaction.findFirst({
       where: {
         messageId: data.messageId,
@@ -160,8 +190,8 @@ export const handleRemoveReaction = async (
       where: { id: reaction.id },
     });
 
-    // Broadcast to channel using Socket.IO
-    socket.to(data.channelId!).emit('reaction_removed', {
+    // Broadcast to the message's channel (never trust client-supplied room alone)
+    socket.to(channelId).emit('reaction_removed', {
       messageId: data.messageId,
       emoji: data.emoji,
       userId: currentUserId,

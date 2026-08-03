@@ -44,6 +44,9 @@ vi.mock('../src/helper.js', () => helper);
 vi.mock('../src/config/upload.js', () => ({
   uploadToSpaces: vi.fn(),
   deleteFromSpaces: vi.fn(),
+  signMessageAttachments: vi.fn(async (m: unknown) => m),
+  signMessagesAttachments: vi.fn(async (msgs: unknown) => msgs),
+  signAttachmentUrls: vi.fn(async (a: unknown) => a),
 }));
 vi.mock('../src/services/mention.service.js', () => mentionService);
 vi.mock('../src/libs/htmlToCleanText.js', () => ({ htmlToCleanText: vi.fn((s: string) => s) }));

@@ -6,12 +6,19 @@ const broadcastToChannelMock = vi.hoisted(() => vi.fn());
 const broadcastToConversationMock = vi.hoisted(() => vi.fn());
 const broadcastWorkspaceHuddleUpdateMock = vi.hoisted(() => vi.fn());
 const broadcastChatMessageMock = vi.hoisted(() => vi.fn());
+const fanoutFromChannelMock = vi.hoisted(() => vi.fn());
+const fanoutFromConversationMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../src/websocket/index.js', () => ({
   broadcastToChannel: broadcastToChannelMock,
   broadcastToConversation: broadcastToConversationMock,
   broadcastWorkspaceHuddleUpdate: broadcastWorkspaceHuddleUpdateMock,
   broadcastChatMessage: broadcastChatMessageMock,
+}));
+
+vi.mock('../src/services/workspace-huddle-broadcast.service.js', () => ({
+  fanoutWorkspaceHuddleFromChannel: fanoutFromChannelMock,
+  fanoutWorkspaceHuddleFromConversation: fanoutFromConversationMock,
 }));
 
 const ORIGINAL_ENV = { ...process.env };
@@ -72,6 +79,43 @@ describe('internal call route', () => {
       .send({ data: {} });
 
     expect(res.status).toBe(400);
+    expect(broadcastWorkspaceHuddleUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('fans channel huddle updates to channel members only', async () => {
+    const app = await createApp();
+
+    const res = await request(app)
+      .post('/internal/call/broadcast-workspace')
+      .set('X-Internal-Secret', 'secret-1')
+      .send({
+        workspaceId: 'ws-1',
+        event: 'workspace_huddle_updated',
+        data: { channelId: 'org-ch-1', active: true, participantCount: 1 },
+      });
+
+    expect(res.status).toBe(200);
+    expect(fanoutFromChannelMock).toHaveBeenCalledWith(
+      'org-ch-1',
+      expect.objectContaining({ channelId: 'org-ch-1', active: true })
+    );
+    expect(broadcastWorkspaceHuddleUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects unscoped huddle presence (no channel/conversation)', async () => {
+    const app = await createApp();
+
+    const res = await request(app)
+      .post('/internal/call/broadcast-workspace')
+      .set('X-Internal-Secret', 'secret-1')
+      .send({
+        workspaceId: 'ws-1',
+        event: 'workspace_huddle_updated',
+        data: { active: true },
+      });
+
+    expect(res.status).toBe(400);
+    expect(fanoutFromChannelMock).not.toHaveBeenCalled();
     expect(broadcastWorkspaceHuddleUpdateMock).not.toHaveBeenCalled();
   });
 });

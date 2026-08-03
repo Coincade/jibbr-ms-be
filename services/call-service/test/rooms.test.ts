@@ -90,6 +90,25 @@ describe('rooms', () => {
     expect(persistRoomMock).toHaveBeenCalled();
   });
 
+  it('transfers host to remaining peer when host leaves', async () => {
+    const router = makeRouter();
+    getPersistedRoomMock.mockResolvedValue(null);
+    getNextWorkerMock.mockReturnValue({
+      pid: 777,
+      createRouter: vi.fn().mockResolvedValue(router),
+    });
+
+    const rooms = await import('../src/mediasoup/rooms.js');
+    const room = await rooms.getOrCreateRoom('room-host-xfer');
+    rooms.getOrCreatePeer(room, 'host', 'Host');
+    rooms.getOrCreatePeer(room, 'guest', 'Guest');
+    expect(room.hostUserId).toBe('host');
+
+    const result = await rooms.removePeer('room-host-xfer', 'host');
+    expect(result).toEqual({ roomEmptied: false });
+    expect(room.hostUserId).toBe('guest');
+  });
+
   it('closes the room when the last peer leaves and cleans up room resources', async () => {
     const router = makeRouter();
     const sendTransport = { close: vi.fn() };
@@ -103,6 +122,12 @@ describe('rooms', () => {
       createRouter: vi.fn().mockResolvedValue(router),
     });
     endHuddleSessionRecordMock.mockResolvedValue(0);
+    resolveWorkspaceIdForRoomMock.mockResolvedValue('ws-1');
+    buildWorkspaceHuddleInactivePayloadMock.mockReturnValue({
+      workspaceId: 'ws-1',
+      roomId: 'room-2',
+      active: false,
+    });
 
     const rooms = await import('../src/mediasoup/rooms.js');
     const room = await rooms.getOrCreateRoom('room-2');
@@ -124,6 +149,10 @@ describe('rooms', () => {
     expect(deletePersistedRoomMock).toHaveBeenCalledWith('room-2');
     expect(rooms.getRoom('room-2')).toBeUndefined();
     expect(createHuddleEndedMessageMock).not.toHaveBeenCalled();
-    expect(emitWorkspaceHuddleUpdateMock).not.toHaveBeenCalled();
+    // Presence must clear even when no DB session row was ended.
+    expect(emitWorkspaceHuddleUpdateMock).toHaveBeenCalledWith(
+      'ws-1',
+      expect.objectContaining({ active: false, roomId: 'room-2' })
+    );
   });
 });
