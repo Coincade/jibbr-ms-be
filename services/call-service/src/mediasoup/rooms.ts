@@ -38,6 +38,7 @@ export type Peer = {
   displayName?: string;
   audioMuted?: boolean;
   videoMuted?: boolean;
+  raisedHand?: boolean;
   sendTransport?: WebRtcTransport;
   recvTransport?: WebRtcTransport;
   producers: Map<string, Producer>;
@@ -71,6 +72,7 @@ const snapshotForRedis = (room: Room) => ({
     displayName: p.displayName,
     audioMuted: p.audioMuted ?? false,
     videoMuted: p.videoMuted ?? false,
+    raisedHand: p.raisedHand ?? false,
   })),
 });
 
@@ -129,6 +131,7 @@ export const getOrCreatePeer = (room: Room, userId: string, displayName?: string
       displayName,
       audioMuted: false,
       videoMuted: false,
+      raisedHand: false,
       producers: new Map(),
       consumers: new Map(),
     };
@@ -147,7 +150,7 @@ export const getOrCreatePeer = (room: Room, userId: string, displayName?: string
 export const setPeerMediaState = (
   roomId: string,
   userId: string,
-  patch: { audioMuted?: boolean; videoMuted?: boolean }
+  patch: { audioMuted?: boolean; videoMuted?: boolean; raisedHand?: boolean }
 ): Peer | undefined => {
   const room = rooms.get(roomId);
   if (!room) return undefined;
@@ -155,6 +158,7 @@ export const setPeerMediaState = (
   if (!peer) return undefined;
   if (patch.audioMuted !== undefined) peer.audioMuted = patch.audioMuted;
   if (patch.videoMuted !== undefined) peer.videoMuted = patch.videoMuted;
+  if (patch.raisedHand !== undefined) peer.raisedHand = patch.raisedHand;
   void persistRoom(snapshotForRedis(room));
   return peer;
 };
@@ -248,7 +252,13 @@ const closeRoom = async (roomId: string): Promise<void> => {
 export const listOtherParticipants = (
   room: Room,
   excludeUserId: string
-): Array<{ userId: string; displayName?: string; audioMuted?: boolean; videoMuted?: boolean }> => {
+): Array<{
+  userId: string;
+  displayName?: string;
+  audioMuted?: boolean;
+  videoMuted?: boolean;
+  raisedHand?: boolean;
+}> => {
   return Array.from(room.peers.values())
     .filter((p) => p.userId !== excludeUserId)
     .map((p) => ({
@@ -256,6 +266,7 @@ export const listOtherParticipants = (
       displayName: p.displayName,
       audioMuted: p.audioMuted,
       videoMuted: p.videoMuted,
+      raisedHand: p.raisedHand,
     }));
 };
 
@@ -286,6 +297,7 @@ export const getRoomSnapshot = (roomId: string) => {
     displayName: p.displayName,
     audioMuted: p.audioMuted,
     videoMuted: p.videoMuted,
+    raisedHand: p.raisedHand,
     producerIds: Array.from(p.producers.keys()),
     producers: Array.from(p.producers.values()).map((producer) => ({
       producerId: producer.id,

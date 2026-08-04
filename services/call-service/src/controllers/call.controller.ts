@@ -65,6 +65,7 @@ const mediaStateBody = z.object({
   channelId: z.string().min(1),
   audioMuted: z.boolean().optional(),
   videoMuted: z.boolean().optional(),
+  raisedHand: z.boolean().optional(),
 });
 
 const MAX_PARTICIPANTS = Number.parseInt(process.env.MAX_HUDDLE_PARTICIPANTS || '25', 10);
@@ -278,10 +279,10 @@ export const endConversationCall = async (req: Request, res: Response): Promise<
 export const updateCallMediaState = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = getUserId(req);
-    const { channelId, audioMuted, videoMuted } = mediaStateBody.parse(req.body);
+    const { channelId, audioMuted, videoMuted, raisedHand } = mediaStateBody.parse(req.body);
     await assertRoomMember(userId, channelId);
 
-    const peer = setPeerMediaState(channelId, userId, { audioMuted, videoMuted });
+    const peer = setPeerMediaState(channelId, userId, { audioMuted, videoMuted, raisedHand });
     if (!peer) {
       res.status(404).json({ error: 'Peer not in call' });
       return;
@@ -291,6 +292,7 @@ export const updateCallMediaState = async (req: Request, res: Response): Promise
       userId,
       audioMuted: peer.audioMuted,
       videoMuted: peer.videoMuted,
+      raisedHand: peer.raisedHand,
     });
   } catch (error) {
     res.status(callErrorStatus(error)).json({

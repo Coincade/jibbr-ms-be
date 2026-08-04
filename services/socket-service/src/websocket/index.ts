@@ -483,6 +483,37 @@ const handleConnection = (socket: SocketLike): void => {
     });
   });
 
+  socket.on('channel_call_raise_hand', async (data) => {
+    const { channelId, raisedHand, sessionId } = data || {};
+    if (!channelId) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    const payload = {
+      channelId,
+      sessionId,
+      userId: user.id,
+      userName: user.name,
+      raisedHand: !!raisedHand,
+    };
+    socket.to(channelId).emit('channel_call_participant_updated', payload);
+    socket.emit('channel_call_participant_updated', payload);
+  });
+
+  socket.on('channel_call_reaction', async (data) => {
+    const { channelId, emoji, reactionId, sessionId } = data || {};
+    if (!channelId || typeof emoji !== 'string' || !emoji.trim()) return;
+    if (!(socket.data as any).allowedChannels?.has(channelId)) return;
+    const payload = {
+      channelId,
+      sessionId,
+      reactionId: typeof reactionId === 'string' && reactionId ? reactionId : undefined,
+      emoji: emoji.trim().slice(0, 16),
+      userId: user.id,
+      userName: user.name,
+      timestamp: new Date().toISOString(),
+    };
+    io.to(channelId).emit('channel_call_reaction', payload);
+  });
+
   socket.on('channel_call_annotation_stroke', async (data) => {
     const { channelId, stroke, sessionId } = data || {};
     if (!channelId || !stroke?.id) return;
@@ -663,6 +694,37 @@ const handleConnection = (socket: SocketLike): void => {
       audioMuted: !!audioMuted,
       videoMuted: !!videoMuted,
     });
+  });
+
+  socket.on('conversation_call_raise_hand', async (data) => {
+    const { conversationId, raisedHand, sessionId } = data || {};
+    if (!conversationId) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    const payload = {
+      conversationId,
+      sessionId,
+      userId: user.id,
+      userName: user.name,
+      raisedHand: !!raisedHand,
+    };
+    socket.to(conversationId).emit('conversation_call_participant_updated', payload);
+    socket.emit('conversation_call_participant_updated', payload);
+  });
+
+  socket.on('conversation_call_reaction', async (data) => {
+    const { conversationId, emoji, reactionId, sessionId } = data || {};
+    if (!conversationId || typeof emoji !== 'string' || !emoji.trim()) return;
+    if (!(socket.data as any).allowedConversations?.has(conversationId)) return;
+    const payload = {
+      conversationId,
+      sessionId,
+      reactionId: typeof reactionId === 'string' && reactionId ? reactionId : undefined,
+      emoji: emoji.trim().slice(0, 16),
+      userId: user.id,
+      userName: user.name,
+      timestamp: new Date().toISOString(),
+    };
+    io.to(conversationId).emit('conversation_call_reaction', payload);
   });
 
   socket.on('conversation_call_annotation_stroke', async (data) => {

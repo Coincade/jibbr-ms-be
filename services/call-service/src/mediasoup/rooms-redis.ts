@@ -21,6 +21,7 @@ export type PersistedRoom = {
     displayName?: string;
     audioMuted: boolean;
     videoMuted: boolean;
+    raisedHand?: boolean;
   }>;
 };
 
