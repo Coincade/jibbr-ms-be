@@ -107,3 +107,7 @@ Spoofs the reported client version for headers, WS, and version-status checks. I
 
 - Installed app version: Electron `app.getVersion()` (from `package.json` / builder).
 - Policy (latest/min): backend env, evaluated in `@jibbr/shared-utils`.
+
+## Rollout checklist
+
+Staging verify → production coexistence → force `0.1.1+`: see [desktop-versioning-rollout.md](./desktop-versioning-rollout.md).
