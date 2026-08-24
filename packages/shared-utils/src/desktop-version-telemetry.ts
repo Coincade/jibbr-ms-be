@@ -56,7 +56,7 @@ export async function recordDesktopClientSeen(
   if (!version) return;
   const record: DesktopVersionSeen = {
     userId,
-    client: 'desktop',
+    client: meta.client || 'unknown',
     version,
     platform: meta.platform,
     arch: meta.arch,

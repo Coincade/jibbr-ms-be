@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  buildUnsupportedHttpBody,
+  evaluateClientVersion,
   evaluateDesktopVersion,
+  getClientVersionPolicy,
   parseDesktopSemver,
   shouldRejectDesktopClient,
   type DesktopVersionPolicy,
@@ -19,10 +22,13 @@ const policy = (overrides?: Partial<DesktopVersionPolicy>): DesktopVersionPolicy
 
 afterEach(() => {
   resetDesktopVersionTelemetryForTests();
-  delete process.env.JIBBR_DESKTOP_LATEST_VERSION;
-  delete process.env.JIBBR_DESKTOP_MIN_VERSION;
-  delete process.env.JIBBR_DESKTOP_FORCE_UPDATE;
-  delete process.env.JIBBR_DESKTOP_REQUIRE_VERSION;
+  for (const prefix of ['JIBBR_DESKTOP', 'JIBBR_MOBILE', 'JIBBR_WEB'] as const) {
+    delete process.env[`${prefix}_LATEST_VERSION`];
+    delete process.env[`${prefix}_MIN_VERSION`];
+    delete process.env[`${prefix}_FORCE_UPDATE`];
+    delete process.env[`${prefix}_REQUIRE_VERSION`];
+    delete process.env[`${prefix}_UPDATE_URL`];
+  }
 });
 
 describe('evaluateDesktopVersion', () => {
@@ -129,6 +135,52 @@ describe('HTTP middleware', () => {
       'x-jibbr-version': '0.1.0',
     });
     expect(result.nextCalled).toBe(true);
+  });
+
+  it('uses independent mobile policy (not desktop min)', () => {
+    process.env.JIBBR_DESKTOP_MIN_VERSION = '0.1.0';
+    process.env.JIBBR_MOBILE_LATEST_VERSION = '1.0.0';
+    process.env.JIBBR_MOBILE_MIN_VERSION = '1.0.0';
+    const allowed = run({
+      'x-jibbr-client': 'mobile',
+      'x-jibbr-version': '1.0.0',
+    });
+    expect(allowed.nextCalled).toBe(true);
+
+    const blocked = run({
+      'x-jibbr-client': 'mobile',
+      'x-jibbr-version': '0.9.0',
+    });
+    expect(blocked.nextCalled).toBe(false);
+    expect(blocked.statusCode).toBe(426);
+  });
+
+  it('uses independent web policy defaults', () => {
+    const result = run({
+      'x-jibbr-client': 'web',
+      'x-jibbr-version': '0.0.0',
+    });
+    expect(result.nextCalled).toBe(true);
+    expect(getClientVersionPolicy('web').minimumSupportedVersion).toBe('0.0.0');
+  });
+
+  it('evaluateClientVersion respects client-specific env', () => {
+    process.env.JIBBR_WEB_LATEST_VERSION = '0.2.0';
+    process.env.JIBBR_WEB_MIN_VERSION = '0.1.0';
+    const result = evaluateClientVersion('web', '0.0.5');
+    expect(result.updateRequired).toBe(true);
+    expect(result.latestVersion).toBe('0.2.0');
+  });
+
+  it('426 body uses the identified client update URL, not desktop', () => {
+    process.env.JIBBR_MOBILE_LATEST_VERSION = '1.1.0';
+    process.env.JIBBR_MOBILE_MIN_VERSION = '1.1.0';
+    process.env.JIBBR_MOBILE_UPDATE_URL = 'https://example.com/mobile';
+    process.env.JIBBR_DESKTOP_UPDATE_URL = 'https://example.com/desktop';
+    const evaluation = evaluateClientVersion('mobile', '1.0.0');
+    const body = buildUnsupportedHttpBody(evaluation);
+    expect(body.error.updateUrl).toBe('https://example.com/mobile');
+    expect(body.error.minimumSupportedVersion).toBe('1.1.0');
   });
 
   it('does not block version-status for unsupported clients', () => {

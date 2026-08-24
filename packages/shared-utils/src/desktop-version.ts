@@ -1,6 +1,11 @@
 import semver from 'semver';
 
 export const DESKTOP_CLIENT_ID = 'desktop';
+export const MOBILE_CLIENT_ID = 'mobile';
+export const WEB_CLIENT_ID = 'web';
+
+export const KNOWN_CLIENT_IDS = [DESKTOP_CLIENT_ID, MOBILE_CLIENT_ID, WEB_CLIENT_ID] as const;
+export type JibbrClientId = (typeof KNOWN_CLIENT_IDS)[number];
 
 export const CLIENT_VERSION_UNSUPPORTED = 'CLIENT_VERSION_UNSUPPORTED';
 export const WS_CLIENT_VERSION_UNSUPPORTED = 'client_version_unsupported';
@@ -16,6 +21,19 @@ const DEFAULT_LATEST = '0.1.1';
 const DEFAULT_MIN = '0.1.0';
 const MAX_META_LEN = 64;
 
+/** Conservative defaults: never lock out current production mobile/web until env is set. */
+const POLICY_DEFAULTS: Record<JibbrClientId, { latest: string; min: string }> = {
+  desktop: { latest: DEFAULT_LATEST, min: DEFAULT_MIN },
+  mobile: { latest: '1.0.0', min: '0.0.0' },
+  web: { latest: '0.0.0', min: '0.0.0' },
+};
+
+const ENV_PREFIX: Record<JibbrClientId, string> = {
+  desktop: 'JIBBR_DESKTOP',
+  mobile: 'JIBBR_MOBILE',
+  web: 'JIBBR_WEB',
+};
+
 export type DesktopVersionPolicy = {
   latestVersion: string;
   minimumSupportedVersion: string;
@@ -26,7 +44,7 @@ export type DesktopVersionPolicy = {
 };
 
 export type DesktopVersionEvaluation = {
-  client: typeof DESKTOP_CLIENT_ID | 'unknown';
+  client: JibbrClientId | 'unknown';
   currentVersion: string | null;
   latestVersion: string;
   minimumSupportedVersion: string;
@@ -88,25 +106,32 @@ export function parseDesktopSemver(value: unknown): string | null {
   return cleaned;
 }
 
-export function getDesktopVersionPolicy(): DesktopVersionPolicy {
-  const latestParsed = parseDesktopSemver(envString('JIBBR_DESKTOP_LATEST_VERSION')) || DEFAULT_LATEST;
-  const minParsed = parseDesktopSemver(envString('JIBBR_DESKTOP_MIN_VERSION')) || DEFAULT_MIN;
+export function getClientVersionPolicy(client: JibbrClientId): DesktopVersionPolicy {
+  const prefix = ENV_PREFIX[client];
+  const defaults = POLICY_DEFAULTS[client];
+  const latestParsed = parseDesktopSemver(envString(`${prefix}_LATEST_VERSION`)) || defaults.latest;
+  const minParsed = parseDesktopSemver(envString(`${prefix}_MIN_VERSION`)) || defaults.min;
   return {
     latestVersion: latestParsed,
     minimumSupportedVersion: minParsed,
-    updateUrl: envString('JIBBR_DESKTOP_UPDATE_URL'),
-    forceUpdate: envFlag('JIBBR_DESKTOP_FORCE_UPDATE', false),
-    requireVersion: envFlag('JIBBR_DESKTOP_REQUIRE_VERSION', false),
+    updateUrl: envString(`${prefix}_UPDATE_URL`),
+    forceUpdate: envFlag(`${prefix}_FORCE_UPDATE`, false),
+    requireVersion: envFlag(`${prefix}_REQUIRE_VERSION`, false),
   };
+}
+
+export function getDesktopVersionPolicy(): DesktopVersionPolicy {
+  return getClientVersionPolicy(DESKTOP_CLIENT_ID);
 }
 
 /**
  * Server-authoritative desktop compatibility evaluation.
  * `supported` means the client may continue using the product.
  */
-export function evaluateDesktopVersion(
+export function evaluateClientVersion(
+  client: JibbrClientId,
   currentVersion: string | null | undefined,
-  policy: DesktopVersionPolicy = getDesktopVersionPolicy()
+  policy: DesktopVersionPolicy = getClientVersionPolicy(client)
 ): DesktopVersionEvaluation {
   const parsed = parseDesktopSemver(currentVersion ?? null);
   const missingVersion = currentVersion == null || String(currentVersion).trim() === '';
@@ -115,7 +140,7 @@ export function evaluateDesktopVersion(
   if (!parsed) {
     const allow = !policy.requireVersion;
     return {
-      client: DESKTOP_CLIENT_ID,
+      client,
       currentVersion: missingVersion ? null : String(currentVersion).slice(0, MAX_META_LEN),
       latestVersion: policy.latestVersion,
       minimumSupportedVersion: policy.minimumSupportedVersion,
@@ -134,7 +159,7 @@ export function evaluateDesktopVersion(
   const supported = aboveMin && !updateRequired;
 
   return {
-    client: DESKTOP_CLIENT_ID,
+    client,
     currentVersion: parsed,
     latestVersion: policy.latestVersion,
     minimumSupportedVersion: policy.minimumSupportedVersion,
@@ -147,8 +172,22 @@ export function evaluateDesktopVersion(
   };
 }
 
+export function evaluateDesktopVersion(
+  currentVersion: string | null | undefined,
+  policy: DesktopVersionPolicy = getDesktopVersionPolicy()
+): DesktopVersionEvaluation {
+  return evaluateClientVersion(DESKTOP_CLIENT_ID, currentVersion, policy);
+}
+
+export function parseJibbrClientId(value: unknown): JibbrClientId | null {
+  if (typeof value !== 'string') return null;
+  const id = value.trim().toLowerCase();
+  if (id === DESKTOP_CLIENT_ID || id === MOBILE_CLIENT_ID || id === WEB_CLIENT_ID) return id;
+  return null;
+}
+
 export function isDesktopClientName(value: unknown): boolean {
-  return typeof value === 'string' && value.trim().toLowerCase() === DESKTOP_CLIENT_ID;
+  return parseJibbrClientId(value) === DESKTOP_CLIENT_ID;
 }
 
 export function headerValue(headers: Record<string, unknown> | undefined, name: string): string | undefined {
@@ -165,10 +204,10 @@ export function headerValue(headers: Record<string, unknown> | undefined, name: 
 export function parseDesktopClientHeaders(
   headers: Record<string, unknown> | undefined
 ): DesktopClientMeta | null {
-  const clientRaw = headerValue(headers, HEADER_CLIENT);
-  if (!isDesktopClientName(clientRaw)) return null;
+  const client = parseJibbrClientId(headerValue(headers, HEADER_CLIENT));
+  if (!client) return null;
   return {
-    client: DESKTOP_CLIENT_ID,
+    client,
     version: sanitizeClientMeta(headerValue(headers, HEADER_VERSION)),
     platform: sanitizeClientMeta(headerValue(headers, HEADER_PLATFORM)),
     arch: sanitizeClientMeta(headerValue(headers, HEADER_ARCH)),
@@ -177,12 +216,12 @@ export function parseDesktopClientHeaders(
 
 export function parseDesktopClientFromRecord(record: Record<string, unknown> | null | undefined): DesktopClientMeta | null {
   if (!record) return null;
-  const client = record.client ?? record.jibbrClient;
-  if (!isDesktopClientName(client)) {
+  const client = parseJibbrClientId(record.client ?? record.jibbrClient);
+  if (!client) {
     return null;
   }
   return {
-    client: DESKTOP_CLIENT_ID,
+    client,
     version: sanitizeClientMeta(record.version ?? record.jibbrVersion),
     platform: sanitizeClientMeta(record.platform ?? record.jibbrPlatform),
     arch: sanitizeClientMeta(record.arch ?? record.jibbrArch),
@@ -211,12 +250,12 @@ export function mergeDesktopClientMeta(
   if (present.length === 0) return null;
   return present.reduce<DesktopClientMeta>(
     (acc, part) => ({
-      client: DESKTOP_CLIENT_ID,
+      client: part.client || acc.client,
       version: part.version ?? acc.version,
       platform: part.platform ?? acc.platform,
       arch: part.arch ?? acc.arch,
     }),
-    { client: DESKTOP_CLIENT_ID, version: null, platform: null, arch: null }
+    { client: present[0].client, version: null, platform: null, arch: null }
   );
 }
 
@@ -227,9 +266,14 @@ export function shouldRejectDesktopClient(evaluation: DesktopVersionEvaluation, 
   return evaluation.updateRequired;
 }
 
+function policyForClient(evaluation: DesktopVersionEvaluation): DesktopVersionPolicy {
+  const client = parseJibbrClientId(evaluation.client);
+  return client ? getClientVersionPolicy(client) : getDesktopVersionPolicy();
+}
+
 export function buildUnsupportedHttpBody(
   evaluation: DesktopVersionEvaluation,
-  policy: DesktopVersionPolicy = getDesktopVersionPolicy()
+  policy: DesktopVersionPolicy = policyForClient(evaluation)
 ): DesktopUnsupportedErrorBody {
   const body: DesktopUnsupportedErrorBody = {
     error: {
@@ -273,7 +317,7 @@ export function toVersionStatusResponse(
     };
   }
   return {
-    client: DESKTOP_CLIENT_ID,
+    client: evaluation.client,
     currentVersion: evaluation.currentVersion,
     latestVersion: evaluation.latestVersion,
     minimumSupportedVersion: evaluation.minimumSupportedVersion,

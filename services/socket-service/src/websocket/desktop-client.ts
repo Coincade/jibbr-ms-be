@@ -1,10 +1,11 @@
 import {
   buildUnsupportedWsPayload,
-  evaluateDesktopVersion,
-  getDesktopVersionPolicy,
+  evaluateClientVersion,
+  getClientVersionPolicy,
   mergeDesktopClientMeta,
   parseDesktopClientFromRecord,
   parseDesktopClientFromRequestUrl,
+  parseJibbrClientId,
   recordDesktopClientSeen,
   shouldRejectDesktopClient,
   WS_CLOSE_CODE_UNSUPPORTED,
@@ -38,8 +39,10 @@ export function rejectUnsupportedDesktopWs(
   userId?: string
 ): boolean {
   if (!meta) return false;
-  const policy = getDesktopVersionPolicy();
-  const evaluation = evaluateDesktopVersion(meta.version, policy);
+  const clientId = parseJibbrClientId(meta.client);
+  if (!clientId) return false;
+  const policy = getClientVersionPolicy(clientId);
+  const evaluation = evaluateClientVersion(clientId, meta.version, policy);
   if (!shouldRejectDesktopClient(evaluation, policy)) return false;
 
   const payload = buildUnsupportedWsPayload(evaluation);
@@ -78,7 +81,7 @@ export async function rememberDesktopClient(userId: string, meta: DesktopClientM
     JSON.stringify({
       service: 'socket-service',
       level: 'info',
-      message: 'desktop client connected',
+      message: 'client connected',
       userId,
       client: meta.client,
       version: meta.version,

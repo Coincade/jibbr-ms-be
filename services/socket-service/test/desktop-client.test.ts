@@ -10,6 +10,8 @@ afterEach(() => {
   delete process.env.JIBBR_DESKTOP_LATEST_VERSION;
   delete process.env.JIBBR_DESKTOP_MIN_VERSION;
   delete process.env.JIBBR_DESKTOP_REQUIRE_VERSION;
+  delete process.env.JIBBR_MOBILE_LATEST_VERSION;
+  delete process.env.JIBBR_MOBILE_MIN_VERSION;
 });
 
 describe('desktop websocket handshake', () => {
@@ -44,6 +46,22 @@ describe('desktop websocket handshake', () => {
     };
     expect(rejectUnsupportedDesktopWs(ws as any, meta, 'user-old')).toBe(true);
     expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('client_version_unsupported'));
+    expect(ws.close).toHaveBeenCalledWith(4403, 'client_version_unsupported');
+  });
+
+  it('rejects unsupported mobile clients independently of desktop min', () => {
+    process.env.JIBBR_DESKTOP_MIN_VERSION = '0.1.0';
+    process.env.JIBBR_MOBILE_LATEST_VERSION = '1.0.0';
+    process.env.JIBBR_MOBILE_MIN_VERSION = '1.0.0';
+    const meta = extractDesktopMetaFromUpgradeUrl('/ws?client=mobile&version=0.9.0&platform=ios');
+    const ws = {
+      OPEN: 1,
+      CONNECTING: 0,
+      readyState: 1,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    expect(rejectUnsupportedDesktopWs(ws as any, meta, 'mobile-user')).toBe(true);
     expect(ws.close).toHaveBeenCalledWith(4403, 'client_version_unsupported');
   });
 

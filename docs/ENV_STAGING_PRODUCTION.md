@@ -23,11 +23,11 @@ Staging values must **not** equal production values.
 
 Desktop version policy (same on every service in that environment):
 
-- `JIBBR_DESKTOP_LATEST_VERSION`
-- `JIBBR_DESKTOP_MIN_VERSION`
-- `JIBBR_DESKTOP_UPDATE_URL` (optional)
-- `JIBBR_DESKTOP_FORCE_UPDATE` (optional, default `false`)
-- `JIBBR_DESKTOP_REQUIRE_VERSION` (optional, default `false` — keep false until all supported Electron builds send version headers)
+- `JIBBR_DESKTOP_LATEST_VERSION` / `JIBBR_DESKTOP_MIN_VERSION` (+ optional `UPDATE_URL`, `FORCE_UPDATE`, `REQUIRE_VERSION`)
+- `JIBBR_MOBILE_LATEST_VERSION` / `JIBBR_MOBILE_MIN_VERSION` (+ optional same flags) — React Native
+- `JIBBR_WEB_LATEST_VERSION` / `JIBBR_WEB_MIN_VERSION` (+ optional same flags) — jibbr-website
+- Keep `*_REQUIRE_VERSION=false` until all supported builds of that client send version headers
+- Policies are independent per client (`desktop` / `mobile` / `web`)
 
 See [desktop-versioning.md](./desktop-versioning.md).
 

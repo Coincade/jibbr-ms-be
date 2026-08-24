@@ -1,10 +1,11 @@
 import type { DesktopClientMeta, DesktopVersionEvaluation } from './desktop-version';
 import {
   buildUnsupportedHttpBody,
-  evaluateDesktopVersion,
-  getDesktopVersionPolicy,
+  evaluateClientVersion,
+  getClientVersionPolicy,
   HTTP_STATUS_CLIENT_UNSUPPORTED,
   parseDesktopClientHeaders,
+  parseJibbrClientId,
   shouldRejectDesktopClient,
   toVersionStatusResponse,
 } from './desktop-version';
@@ -59,8 +60,13 @@ export function createDesktopVersionMiddleware(options?: { extraExemptPrefixes?:
       return;
     }
 
-    const policy = getDesktopVersionPolicy();
-    const evaluation = evaluateDesktopVersion(meta.version, policy);
+    const clientId = parseJibbrClientId(meta.client);
+    if (!clientId) {
+      next();
+      return;
+    }
+    const policy = getClientVersionPolicy(clientId);
+    const evaluation = evaluateClientVersion(clientId, meta.version, policy);
     if (res.locals) {
       res.locals.jibbrDesktop = { meta, evaluation };
     }
@@ -70,7 +76,7 @@ export function createDesktopVersionMiddleware(options?: { extraExemptPrefixes?:
         JSON.stringify({
           service: 'desktop-version',
           level: 'warn',
-          message: 'Desktop client version metadata missing or invalid',
+          message: 'Client version metadata missing or invalid',
           client: meta.client,
           version: meta.version,
           platform: meta.platform,
@@ -92,12 +98,17 @@ export function createDesktopVersionMiddleware(options?: { extraExemptPrefixes?:
 
 export function handleDesktopVersionStatus(req: HttpLikeRequest, res: HttpLikeResponse): void {
   const meta = parseDesktopClientHeaders(req.headers as Record<string, unknown>);
-  const policy = getDesktopVersionPolicy();
   if (!meta) {
-    res.status(200).json(toVersionStatusResponse(evaluateDesktopVersion(null, policy), false));
+    res.status(200).json(toVersionStatusResponse(evaluateClientVersion('desktop', null), false));
     return;
   }
-  const evaluation = evaluateDesktopVersion(meta.version, policy);
+  const clientId = parseJibbrClientId(meta.client);
+  if (!clientId) {
+    res.status(200).json(toVersionStatusResponse(evaluateClientVersion('desktop', null), false));
+    return;
+  }
+  const policy = getClientVersionPolicy(clientId);
+  const evaluation = evaluateClientVersion(clientId, meta.version, policy);
   res.status(200).json(toVersionStatusResponse(evaluation, true));
 }
 
