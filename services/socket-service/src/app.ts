@@ -1,5 +1,6 @@
 import express, { Application, Request, Response, type Router } from 'express';
 import cors from 'cors';
+import { createDesktopVersionMiddleware, handleDesktopVersionStatus } from '@jibbr/shared-utils';
 import { realtimeMetrics } from './services/realtime-observability.service.js';
 
 export type CreateSocketAppOptions = {
@@ -30,6 +31,9 @@ export const createSocketApp = (
       timestamp: new Date().toISOString(),
     });
   });
+
+  app.get('/api/client/version-status', handleDesktopVersionStatus);
+  app.use(createDesktopVersionMiddleware());
 
   if (options.internalRouter) {
     app.use('/internal', options.internalRouter);

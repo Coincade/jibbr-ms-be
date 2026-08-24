@@ -7,14 +7,18 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc -w",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test:unit": "vitest --run",
+    "test": "vitest --run"
   },
   "dependencies": {
+    "semver": "^7.8.5",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",
-    "typescript": "^5.7.3"
+    "@types/semver": "^7.8.0",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.11"
   }
 }
-

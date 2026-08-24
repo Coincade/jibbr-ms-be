@@ -37,6 +37,14 @@ import {
 } from './handlers/direct-message.handler.js';
 import { handleMarkAsRead } from './handlers/mark-as-read.handler.js';
 import { createWsServer, type IoLike, type SocketLike } from './ws-compat.js';
+import {
+  applyDesktopMeta,
+  extractDesktopMetaFromFrame,
+  extractDesktopMetaFromUpgradeUrl,
+  rejectUnsupportedDesktopWs,
+  rememberDesktopClient,
+} from './desktop-client.js';
+import type { DesktopClientMeta } from '@jibbr/shared-utils';
 import { warmMembershipCacheForUser } from '../services/socket-membership-cache.service.js';
 import { checkSocketEventRateLimitDistributed } from '../services/socket-event-rate-limiter.service.js';
 import {
@@ -70,6 +78,15 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
   } = createWsServer(server);
 
   io = wsIo;
+
+  try {
+    const { getStateRedisClient } = await import('../config/redis.js');
+    const { setDesktopVersionTelemetryRedis } = await import('@jibbr/shared-utils');
+    const redis = await getStateRedisClient();
+    setDesktopVersionTelemetryRedis(redis);
+  } catch (error) {
+    console.warn('[socket] Desktop version telemetry Redis unavailable:', error);
+  }
 
   // Server-side heartbeat (native WS ping/pong) to kill half-open connections quickly.
   // This prevents long stalls and reduces tail latency under flaky networks.
@@ -123,17 +140,32 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
     }
   })();
 
-  const attachAuthenticatedSocket = (ws: any, user: { id: string; name?: string; email?: string; image?: string }) => {
+  const attachAuthenticatedSocket = (
+    ws: any,
+    user: { id: string; name?: string; email?: string; image?: string },
+    initialMeta?: DesktopClientMeta | null
+  ) => {
     const socket = createSocketFromWs(ws) as any as SocketLike & {
       _dispatchIncoming: (type: string, payload: any) => void;
     };
     socket.data.user = user as any;
+    (socket.data as any).desktopClient = initialMeta || null;
+    void rememberDesktopClient(user.id, initialMeta || null);
 
     ws.on('message', (raw: any) => {
       const frame = parseIncomingFrame(raw);
       if (!frame) {
         socket.emit('error', { message: 'Invalid message format' });
         return;
+      }
+      if (frame.type === 'client_info' || frame.type === 'auth') {
+        const nextMeta = applyDesktopMeta((socket.data as any).desktopClient, extractDesktopMetaFromFrame(frame));
+        (socket.data as any).desktopClient = nextMeta;
+        if (rejectUnsupportedDesktopWs(ws, nextMeta, user.id)) {
+          return;
+        }
+        void rememberDesktopClient(user.id, nextMeta);
+        if (frame.type === 'client_info') return;
       }
       socket._dispatchIncoming(frame.type, frame.data);
     });
@@ -157,12 +189,14 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
     });
 
     // Prefer subprotocol / first-message auth; query `?token=` kept as migration fallback.
+    let desktopMeta = extractDesktopMetaFromUpgradeUrl(req.url);
     let user =
       (await authenticateFromProtocols(req)) ||
       (await authenticateFromRequestUrl(req.url));
 
     if (user) {
-      attachAuthenticatedSocket(ws, user);
+      if (rejectUnsupportedDesktopWs(ws, desktopMeta, user.id)) return;
+      attachAuthenticatedSocket(ws, user, desktopMeta);
       return;
     }
 
@@ -185,6 +219,7 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
         return;
       }
       const token = typeof frame.data?.token === 'string' ? frame.data.token : '';
+      desktopMeta = applyDesktopMeta(desktopMeta, extractDesktopMetaFromFrame(frame));
       user = await authenticateWithToken(token);
       if (!user) {
         clearTimeout(authTimer);
@@ -197,7 +232,8 @@ export const initializeWebSocketService = async (server: Server): Promise<IoLike
       }
       clearTimeout(authTimer);
       ws.off('message', onAuthMessage);
-      attachAuthenticatedSocket(ws, user);
+      if (rejectUnsupportedDesktopWs(ws, desktopMeta, user.id)) return;
+      attachAuthenticatedSocket(ws, user, desktopMeta);
     };
 
     ws.on('message', onAuthMessage);

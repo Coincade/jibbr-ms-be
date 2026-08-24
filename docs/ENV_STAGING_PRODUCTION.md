@@ -21,6 +21,16 @@ These must be **identical** across auth, upload, messaging, socket, and call **f
 
 Staging values must **not** equal production values.
 
+Desktop version policy (same on every service in that environment):
+
+- `JIBBR_DESKTOP_LATEST_VERSION`
+- `JIBBR_DESKTOP_MIN_VERSION`
+- `JIBBR_DESKTOP_UPDATE_URL` (optional)
+- `JIBBR_DESKTOP_FORCE_UPDATE` (optional, default `false`)
+- `JIBBR_DESKTOP_REQUIRE_VERSION` (optional, default `false` — keep false until all supported Electron builds send version headers)
+
+See [desktop-versioning.md](./desktop-versioning.md).
+
 ## How to fill
 
 ```bash

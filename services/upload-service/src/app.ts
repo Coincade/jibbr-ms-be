@@ -3,6 +3,7 @@ import cors from 'cors';
 
 import uploadRoutes from './routes/upload.route.js';
 import { createJwtOrIpRateLimiter } from '@jibbr/rate-limit';
+import { createDesktopVersionMiddleware, handleDesktopVersionStatus } from '@jibbr/shared-utils';
 
 export const createUploadApp = (): Application => {
   const app: Application = express();
@@ -22,6 +23,9 @@ export const createUploadApp = (): Application => {
       timestamp: new Date().toISOString(),
     });
   });
+
+  app.get('/api/client/version-status', handleDesktopVersionStatus);
+  app.use(createDesktopVersionMiddleware());
 
   app.use(createJwtOrIpRateLimiter());
 

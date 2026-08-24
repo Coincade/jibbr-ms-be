@@ -1,6 +1,7 @@
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import compression from 'compression';
+import { createDesktopVersionMiddleware, handleDesktopVersionStatus } from '@jibbr/shared-utils';
 import { appLimiter, isReadHeavyRequest, readHeavyLimiter } from './config/rateLimit.js';
 
 type CreateMessagingAppOptions = {
@@ -39,8 +40,11 @@ export const createMessagingApp = ({
     });
   });
 
+  app.get('/api/client/version-status', handleDesktopVersionStatus);
+  app.use(createDesktopVersionMiddleware());
+
   app.use((req: Request, res: Response, next) => {
-    if (req.path === '/health') return next();
+    if (req.path === '/health' || req.path === '/api/client/version-status') return next();
     if (!isDbConnected()) {
       return res.status(503).json({
         message: 'Database unavailable. Please try again in a moment.',

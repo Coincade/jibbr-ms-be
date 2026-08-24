@@ -68,6 +68,27 @@ describe('Auth App (App.ts)', () => {
     expect(res.status).toBe(404);
   });
 
+  it('GET /api/client/version-status remains available when db is down', async () => {
+    const app = createAuthApp({
+      isDbConnected: () => false,
+    });
+
+    const res = await request(app).get('/api/client/version-status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        supported: true,
+        updateRequired: false,
+      })
+    );
+  });
+
+  it('does not block web clients without desktop headers', async () => {
+    const app = createAuthApp();
+    const res = await request(app).get('/api/open');
+    expect(res.status).toBe(404);
+  });
+
   it('sets view engine and views when viewsPath is provided', () => {
     const app = createAuthApp({
       viewsPath: 'C:\\tmp\\views',

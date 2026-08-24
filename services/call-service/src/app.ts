@@ -1,5 +1,6 @@
 import express, { Application, Request, Response, Router } from 'express';
 import cors from 'cors';
+import { createDesktopVersionMiddleware, handleDesktopVersionStatus } from '@jibbr/shared-utils';
 import callRoutes from './routes/call.route.js';
 import { hostCheckInternal, kickPeerInternal } from './routes/internal-call.route.js';
 import { getCallServiceHealth } from './services/health.service.js';
@@ -20,6 +21,9 @@ export const createCallApp = (): Application => {
     const statusCode = health.status === 'unhealthy' ? 503 : 200;
     res.status(statusCode).json(health);
   });
+
+  app.get('/api/client/version-status', handleDesktopVersionStatus);
+  app.use(createDesktopVersionMiddleware());
 
   const internal = Router();
   internal.post('/call/kick-peer', (req, res) => {

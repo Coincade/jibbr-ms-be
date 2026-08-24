@@ -64,7 +64,16 @@ describe('Messaging App (app.ts)', () => {
 
     const res = await request(app).get('/api/open');
 
-    // Route does not exist, but middleware should pass through (not 503).
     expect(res.status).toBe(404);
+  });
+
+  it('GET /api/client/version-status remains available when db is down', async () => {
+    const app = createMessagingApp({
+      isDbConnected: () => false,
+    });
+
+    const res = await request(app).get('/api/client/version-status');
+    expect(res.status).toBe(200);
+    expect(res.body.supported).toBe(true);
   });
 });

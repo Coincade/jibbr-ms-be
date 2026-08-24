@@ -127,4 +127,17 @@ router.post('/call/broadcast-message', (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+router.get('/desktop-versions', async (req: Request, res: Response) => {
+  if (!verifyInternal(req, res)) return;
+  try {
+    const { getDesktopVersionStats } = await import('@jibbr/shared-utils');
+    const stats = await getDesktopVersionStats();
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to load desktop version stats',
+    });
+  }
+});
+
 export default router;

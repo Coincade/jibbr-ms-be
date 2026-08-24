@@ -2,6 +2,50 @@ import { z } from 'zod';
 
 export { shouldNotify, type NotificationPrefsRaw, type NotificationEventMeta } from './notification-preferences';
 
+export {
+  DESKTOP_CLIENT_ID,
+  CLIENT_VERSION_UNSUPPORTED,
+  WS_CLIENT_VERSION_UNSUPPORTED,
+  WS_CLOSE_CODE_UNSUPPORTED,
+  HTTP_STATUS_CLIENT_UNSUPPORTED,
+  HEADER_CLIENT,
+  HEADER_VERSION,
+  HEADER_PLATFORM,
+  HEADER_ARCH,
+  sanitizeClientMeta,
+  parseDesktopSemver,
+  getDesktopVersionPolicy,
+  evaluateDesktopVersion,
+  isDesktopClientName,
+  parseDesktopClientHeaders,
+  parseDesktopClientFromRecord,
+  parseDesktopClientFromRequestUrl,
+  mergeDesktopClientMeta,
+  shouldRejectDesktopClient,
+  buildUnsupportedHttpBody,
+  buildUnsupportedWsPayload,
+  toVersionStatusResponse,
+  type DesktopVersionPolicy,
+  type DesktopVersionEvaluation,
+  type DesktopClientMeta,
+  type DesktopUnsupportedErrorBody,
+} from './desktop-version';
+
+export {
+  createDesktopVersionMiddleware,
+  handleDesktopVersionStatus,
+  type LocalsDesktopVersion,
+} from './desktop-version-http';
+
+export {
+  setDesktopVersionTelemetryRedis,
+  resetDesktopVersionTelemetryForTests,
+  recordDesktopClientSeen,
+  getDesktopVersionStats,
+  type DesktopVersionSeen,
+  type DesktopVersionStats,
+} from './desktop-version-telemetry';
+
 // Validation utility
 export function validateRequest<T>(schema: z.ZodSchema<T>, data: unknown): T {
   return schema.parse(data);

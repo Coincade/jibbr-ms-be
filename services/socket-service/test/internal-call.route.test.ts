@@ -118,4 +118,20 @@ describe('internal call route', () => {
     expect(fanoutFromChannelMock).not.toHaveBeenCalled();
     expect(broadcastWorkspaceHuddleUpdateMock).not.toHaveBeenCalled();
   });
+
+  it('returns desktop version stats for authorized internal callers', async () => {
+    const app = await createApp();
+    const res = await request(app)
+      .get('/internal/desktop-versions')
+      .set('X-Internal-Secret', 'secret-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        latestVersion: expect.any(String),
+        minimumSupportedVersion: expect.any(String),
+        versions: expect.any(Array),
+      })
+    );
+  });
 });

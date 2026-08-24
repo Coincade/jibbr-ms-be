@@ -1,5 +1,6 @@
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
+import { createDesktopVersionMiddleware, handleDesktopVersionStatus } from '@jibbr/shared-utils';
 import { appLimiter } from './config/rateLimit.js';
 
 type CreateAuthAppOptions = {
@@ -35,8 +36,11 @@ export const createAuthApp = ({
     });
   });
 
+  app.get('/api/client/version-status', handleDesktopVersionStatus);
+  app.use(createDesktopVersionMiddleware());
+
   app.use((req: Request, res: Response, next) => {
-    if (req.path === '/health') return next();
+    if (req.path === '/health' || req.path === '/api/client/version-status') return next();
     if (!isDbConnected()) {
       return res.status(503).json({
         message: 'Database unavailable. Please try again in a moment.',
