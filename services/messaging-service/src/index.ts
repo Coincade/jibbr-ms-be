@@ -28,6 +28,7 @@ void (async () => {
     { default: searchRoutes },
     { default: workspaceCollaborationRoutes },
     { default: collaborationGroupRoutes },
+    { default: starboardRoutes },
     {
       getMembershipOutboxStats,
       initMembershipOutbox,
@@ -47,6 +48,7 @@ void (async () => {
     import('./routes/search.route.js'),
     import('./routes/workspace-collaboration.route.js'),
     import('./routes/collaboration-group.route.js'),
+    import('./routes/starboard.route.js'),
     import('./services/membership-outbox.service.js'),
   ]);
 
@@ -91,6 +93,7 @@ void (async () => {
   app.use('/api/search', searchRoutes);
   app.use('/api/workspace-collaborations', workspaceCollaborationRoutes);
   app.use('/api/collaboration-groups', collaborationGroupRoutes);
+  app.use('/api/starboard', starboardRoutes);
   app.get('/health/outbox', async (_req, res) => {
     try {
       const stats = await getMembershipOutboxStats();

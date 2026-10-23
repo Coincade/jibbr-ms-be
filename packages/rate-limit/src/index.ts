@@ -14,6 +14,11 @@ function parseEnvInt(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/** Liveness and ops probes (`/health`, `/health/outbox`, `/health/realtime`). */
+function isHealthProbe(path: string): boolean {
+  return path === '/health' || path.startsWith('/health/');
+}
+
 export type CreateJwtOrIpRateLimiterOptions = {
   /** Env var name for JWT secret (read on each request, after dotenv). Default JWT_SECRET */
   jwtSecretEnvVar?: string;
@@ -43,7 +48,7 @@ export function createJwtOrIpRateLimiter(
     legacyHeaders: false,
     message,
     skip: (req, res) => {
-      if (req.path === '/health') return true;
+      if (isHealthProbe(req.path)) return true;
       return options.skip?.(req, res) ?? false;
     },
     keyGenerator: (req: Request, _res: Response) => {

@@ -69,6 +69,7 @@ vi.mock('../src/routes/recents.route.js', () => ({ default: (_req: unknown, _res
 vi.mock('../src/routes/search.route.js', () => ({ default: (_req: unknown, _res: unknown, next: () => void) => next() }));
 vi.mock('../src/routes/workspace-collaboration.route.js', () => ({ default: (_req: unknown, _res: unknown, next: () => void) => next() }));
 vi.mock('../src/routes/collaboration-group.route.js', () => ({ default: (_req: unknown, _res: unknown, next: () => void) => next() }));
+vi.mock('../src/routes/starboard.route.js', () => ({ default: (_req: unknown, _res: unknown, next: () => void) => next() }));
 vi.mock('../src/services/membership-outbox.service.js', () => ({
   initMembershipOutbox,
   startMembershipOutboxRelay,

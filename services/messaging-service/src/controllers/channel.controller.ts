@@ -1497,6 +1497,7 @@ export const inviteToBridgeChannel = async (req: Request, res: Response) => {
 
     const clientAppUrl = process.env.CLIENT_APP_URL || "https://jibbr.com";
     const acceptUrl = `${clientAppUrl}/bridge-invite?token=${token}`;
+    const desktopUrl = `jibbr://bridge-invite?token=${token}`;
 
     const inviter = await prisma.user.findUnique({
       where: { id: user.id },
@@ -1515,7 +1516,9 @@ export const inviteToBridgeChannel = async (req: Request, res: Response) => {
             to: inviteeEmail,
             channelName: channel.name,
             inviterName,
-            url: acceptUrl
+            url: acceptUrl,
+            token,
+            desktopUrl
           })
         });
         if (!emailRes.ok) {

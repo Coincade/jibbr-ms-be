@@ -54,6 +54,7 @@ model User {
   workspaces               Workspace[]
   channelInvites           ChannelInvite[]
   userRecents              UserRecent[]
+  starboardItems           StarboardItem[]
   mutedChannels            UserChannelMute[]
   collaborationRequestsSent WorkspaceCollaborationRequest[] @relation("CollabRequestInitiatorUser")
   collaborationRequestsResponded WorkspaceCollaborationRequest[] @relation("CollabRequestResponderUser")
@@ -111,6 +112,7 @@ model Workspace {
   collaborationsAsB      WorkspaceCollaboration[] @relation("CollabWorkspaceB")
   user                   User      @relation(fields: [userId], references: [id])
   userRecents            UserRecent[]
+  starboardItems         StarboardItem[]
   groupMemberships       CollaborationGroupMembership[]
 }
 
@@ -452,6 +454,28 @@ model UserRecent {
 
   @@unique([userId, workspaceId, type, targetId])
   @@index([userId, workspaceId, lastOpenedAt(sort: Desc)])
+}
+
+enum StarboardItemType {
+  CHANNEL
+  MEMBER
+}
+
+/// Per-user ordered Starboard (starred channels + DMs) within a workspace.
+/// itemId is a Channel.id for CHANNEL and the other user's User.id for MEMBER.
+model StarboardItem {
+  id          String            @id @default(cuid())
+  userId      String
+  workspaceId String
+  itemType    StarboardItemType
+  itemId      String
+  position    Int
+  createdAt   DateTime          @default(now())
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, itemType, itemId])
+  @@index([userId, workspaceId])
 }
 
 enum WorkspaceCollaborationRequestStatus {

@@ -10,8 +10,12 @@
         <div class="container">
             <p class="greeting">Hello <strong><%= inviteeName %></strong>,</p>
             <p class="body-text"><strong><%= inviterName %></strong> invited you to join the Bridge Channel <strong><%= channelName %></strong> on Jibbr.</p>
-            <p class="body-text">Please click the button below to accept the invitation.</p>
+            <p class="body-text">Please click the button below to accept the invitation. You can continue in the Jibbr desktop app, the mobile app, or your browser.</p>
             <a href="<%= url %>" target="_blank" class="btn">Accept Invitation</a>
+
+            <% if (locals.desktopUrl) { %>
+            <p class="body-text">Already have Jibbr installed on your computer? <a href="<%= desktopUrl %>">Open in the Jibbr desktop app</a></p>
+            <% } %>
 
             <p class="note">This link expires in 3 days.</p>
 

@@ -21,6 +21,34 @@ export const checkEmailRegistered = async (req: Request, res: Response) => {
   }
 };
 
+const INVITE_TOKEN_PATTERN = /^[A-Za-z0-9-]{8,128}$/;
+
+/**
+ * Desktop (Electron) deep link for a bridge invite. Prefers an explicit `desktopUrl`,
+ * then `token`, then the `token` query param of the web `url` (older messaging-service
+ * callers only send `url`). Returns null when no safe token can be found.
+ */
+const resolveBridgeInviteDesktopUrl = (body: Record<string, unknown>): string | null => {
+  const explicit = typeof body.desktopUrl === "string" ? body.desktopUrl : "";
+  let token = typeof body.token === "string" ? body.token : "";
+  if (!token && explicit.startsWith("jibbr://")) {
+    try {
+      token = new URL(explicit).searchParams.get("token") || "";
+    } catch {
+      token = "";
+    }
+  }
+  if (!token && typeof body.url === "string") {
+    try {
+      token = new URL(body.url).searchParams.get("token") || "";
+    } catch {
+      token = "";
+    }
+  }
+  if (!INVITE_TOKEN_PATTERN.test(token)) return null;
+  return `jibbr://bridge-invite?token=${encodeURIComponent(token)}`;
+};
+
 export const sendBridgeInviteEmail = async (req: Request, res: Response) => {
   try {
     const { to, channelName, inviterName, url } = req.body;
@@ -35,6 +63,7 @@ export const sendBridgeInviteEmail = async (req: Request, res: Response) => {
       channelName,
       inviterName,
       url,
+      desktopUrl: resolveBridgeInviteDesktopUrl(req.body ?? {}),
     });
 
     await emailQueue.add(emailQueueName, {

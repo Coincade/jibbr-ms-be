@@ -58,7 +58,7 @@ describe('createJwtOrIpRateLimiter', () => {
     expect(capturedOptions.current.keyGenerator(req, {} as Response)).toBe('ip:10.0.0.5');
   });
 
-  it('always skips /health and respects env-based limits', async () => {
+  it('always skips health probes and respects env-based limits', async () => {
     process.env.RATE_LIMIT_WINDOW_MS = '120000';
     process.env.RATE_LIMIT_MAX = '55';
 
@@ -69,6 +69,11 @@ describe('createJwtOrIpRateLimiter', () => {
 
     expect(capturedOptions.current.windowMs).toBe(120000);
     expect(capturedOptions.current.limit).toBe(55);
-    expect(capturedOptions.current.skip({ path: '/health' } as Request, {} as Response)).toBe(true);
+    const skip = capturedOptions.current.skip as (req: Request, res: Response) => boolean;
+    expect(skip({ path: '/health' } as Request, {} as Response)).toBe(true);
+    expect(skip({ path: '/health/outbox' } as Request, {} as Response)).toBe(true);
+    expect(skip({ path: '/health/realtime' } as Request, {} as Response)).toBe(true);
+    expect(skip({ path: '/healthcare' } as Request, {} as Response)).toBe(false);
+    expect(skip({ path: '/api/messages' } as Request, {} as Response)).toBe(false);
   });
 });

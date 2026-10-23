@@ -154,6 +154,7 @@ describe('Internal Controller Testing', () => {
         channelName: 'general',
         inviterName: 'Alice',
         url: validBody.url,
+        desktopUrl: null,
       });
       expect(emailQueue.add).toHaveBeenCalledWith(emailQueueName, {
         to: validBody.to,
@@ -162,6 +163,40 @@ describe('Internal Controller Testing', () => {
       });
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({ message: 'Email queued successfully' });
+    });
+
+    it('builds desktopUrl from explicit token', async () => {
+      (emailQueue.add as any).mockResolvedValue(undefined);
+      const token = '3f1c2a9e-1111-4222-8333-444455556666';
+      const req = { body: { ...validBody, token } } as any;
+      await sendBridgeInviteEmail(req, createRes());
+      expect(renderEmailEjs).toHaveBeenCalledWith(
+        'bridge-invite',
+        expect.objectContaining({ desktopUrl: `jibbr://bridge-invite?token=${token}` })
+      );
+    });
+
+    it('derives desktopUrl from the web url token for legacy callers', async () => {
+      (emailQueue.add as any).mockResolvedValue(undefined);
+      const token = '3f1c2a9e-1111-4222-8333-444455556666';
+      const req = {
+        body: { ...validBody, url: `https://jibbr.com/bridge-invite?token=${token}` },
+      } as any;
+      await sendBridgeInviteEmail(req, createRes());
+      expect(renderEmailEjs).toHaveBeenCalledWith(
+        'bridge-invite',
+        expect.objectContaining({ desktopUrl: `jibbr://bridge-invite?token=${token}` })
+      );
+    });
+
+    it('omits desktopUrl when token is unsafe', async () => {
+      (emailQueue.add as any).mockResolvedValue(undefined);
+      const req = { body: { ...validBody, token: '"><script>' } } as any;
+      await sendBridgeInviteEmail(req, createRes());
+      expect(renderEmailEjs).toHaveBeenCalledWith(
+        'bridge-invite',
+        expect.objectContaining({ desktopUrl: null })
+      );
     });
 
     it('uses "there" as inviteeName when email has no @ local part', async () => {
