@@ -16,6 +16,7 @@ import {
 import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
 import { buildForwardedContent } from "./message.controller.js";
 import { htmlToCleanText } from "../libs/htmlToCleanText.js";
+import { shareFileRejection } from "../libs/shareable-file.js";
 import {
   findActiveCollaborationBetweenWorkspaces,
   findActiveGroupContainingBothWorkspaces,
@@ -889,6 +890,10 @@ export const sendDirectMessageWithAttachments = async (req: Request, res: Respon
     const attachments = [];
     if (req.files && Array.isArray(req.files)) {
       for (const file of req.files) {
+        const rejection = shareFileRejection(file);
+        if (rejection) {
+          return res.status(400).json({ message: rejection });
+        }
         const fileUrl = await uploadToSpaces(file);
         attachments.push({
           filename: file.filename || file.originalname,

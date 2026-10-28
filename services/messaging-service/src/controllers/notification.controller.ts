@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { filterUnreadChannelRowsForUser } from "@jibbr/database";
-import { formatError } from "../helper.js";
+import { formatError, isTownhallChannelName } from "../helper.js";
 import prisma from "../config/database.js";
 import { ZodError } from "zod";
 import { z } from "zod";
@@ -602,12 +602,16 @@ export const getChannelMutes = async (req: Request, res: Response) => {
           deletedAt: null,
         },
       },
-      select: { channelId: true },
+      select: { channelId: true, channel: { select: { name: true } } },
     });
 
     return res.status(200).json({
       message: "Channel mutes fetched successfully",
-      data: { channelIds: mutes.map((m) => m.channelId) },
+      data: {
+        channelIds: mutes
+          .filter((m) => !isTownhallChannelName(m.channel.name))
+          .map((m) => m.channelId),
+      },
     });
   } catch (error) {
     if (error instanceof ZodError) {
@@ -637,7 +641,7 @@ export const setChannelMute = async (req: Request, res: Response) => {
         },
       },
       include: {
-        channel: { select: { deletedAt: true } },
+        channel: { select: { deletedAt: true, name: true } },
       },
     });
 
@@ -646,6 +650,12 @@ export const setChannelMute = async (req: Request, res: Response) => {
     }
     if (channelMember.channel.deletedAt) {
       return res.status(404).json({ message: "Channel not found" });
+    }
+    if (body.muted && isTownhallChannelName(channelMember.channel.name)) {
+      await prisma.userChannelMute.deleteMany({
+        where: { userId: user.id, channelId: body.channelId },
+      });
+      return res.status(400).json({ message: "#Townhall cannot be muted" });
     }
 
     if (body.muted) {

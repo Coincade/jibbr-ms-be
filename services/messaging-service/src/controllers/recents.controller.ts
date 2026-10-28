@@ -45,11 +45,40 @@ export const getRecents = async (req: Request, res: Response) => {
       orderBy: { lastOpenedAt: "desc" },
     });
 
-    const data = recents.map((r) => ({
-      type: r.type,
-      targetId: r.targetId,
-      lastOpenedAt: r.lastOpenedAt.toISOString(),
-    }));
+    const channelIds = recents.filter((r) => r.type === "CHANNEL").map((r) => r.targetId);
+    const conversationIds = recents
+      .filter((r) => r.type === "CONVERSATION")
+      .map((r) => r.targetId);
+
+    const [activeChannels, activeConversations] = await Promise.all([
+      channelIds.length
+        ? prisma.channelMember.findMany({
+            where: { userId: user.id, isActive: true, channelId: { in: channelIds } },
+            select: { channelId: true },
+          })
+        : Promise.resolve([]),
+      conversationIds.length
+        ? prisma.conversationParticipant.findMany({
+            where: { userId: user.id, isActive: true, conversationId: { in: conversationIds } },
+            select: { conversationId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const activeChannelIds = new Set(activeChannels.map((m) => m.channelId));
+    const activeConversationIds = new Set(activeConversations.map((m) => m.conversationId));
+
+    const data = recents
+      .filter((r) =>
+        r.type === "CHANNEL"
+          ? activeChannelIds.has(r.targetId)
+          : activeConversationIds.has(r.targetId)
+      )
+      .map((r) => ({
+        type: r.type,
+        targetId: r.targetId,
+        lastOpenedAt: r.lastOpenedAt.toISOString(),
+      }));
 
     return res.status(200).json({
       message: "Recents fetched successfully",

@@ -39,7 +39,7 @@ describe('upload.controller', () => {
     getSignedSpacesUrl.mockResolvedValueOnce('https://cdn.example.com/f1?X-Amz-Signature=abc');
     await uploadFiles(
       {
-        files: [{ originalname: 'a.txt', mimetype: 'text/plain', size: 10, buffer: Buffer.from('a') }],
+        files: [{ originalname: 'a.pdf', mimetype: 'application/pdf', size: 10, buffer: Buffer.from('a') }],
       } as any,
       res
     );
@@ -63,7 +63,7 @@ describe('upload.controller', () => {
     uploadToSpaces.mockRejectedValueOnce(new Error('boom'));
     await uploadFiles(
       {
-        files: [{ originalname: 'a.txt', mimetype: 'text/plain', size: 10, buffer: Buffer.from('a') }],
+        files: [{ originalname: 'a.pdf', mimetype: 'application/pdf', size: 10, buffer: Buffer.from('a') }],
       } as any,
       res
     );

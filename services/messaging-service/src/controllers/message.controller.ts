@@ -14,6 +14,7 @@ import {
 } from "../config/upload.js";
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from "../services/mention.service.js"; // [mentions]
 import { htmlToCleanText } from "../libs/htmlToCleanText.js";
+import { shareFileRejection } from "../libs/shareable-file.js";
 import { publishMessageCreatedEvent, publishMessageUpdatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
 import {
   sendMessageSchema,
@@ -225,6 +226,10 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
     const attachments = [];
     if (req.files && Array.isArray(req.files)) {
       for (const file of req.files) {
+        const rejection = shareFileRejection(file);
+        if (rejection) {
+          return res.status(400).json({ message: rejection });
+        }
         const fileUrl = await uploadToSpaces(file);
         attachments.push({
           filename: file.filename || file.originalname,

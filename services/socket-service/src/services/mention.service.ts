@@ -183,11 +183,19 @@ export async function createMentionsAndNotifications(
 
   let mutedUserIds = new Set<string>();
   if (channelId) {
-    const muteRows = await prisma.userChannelMute.findMany({
-      where: { channelId },
-      select: { userId: true },
+    const channel = await prisma.channel.findUnique({
+      where: { id: channelId },
+      select: { name: true },
     });
-    mutedUserIds = new Set(muteRows.map((r) => r.userId));
+    const normalized = (channel?.name ?? '').trim().toLowerCase();
+    const townhall = normalized === 'townhall' || normalized === 'town hall';
+    if (!townhall) {
+      const muteRows = await prisma.userChannelMute.findMany({
+        where: { channelId },
+        select: { userId: true },
+      });
+      mutedUserIds = new Set(muteRows.map((r) => r.userId));
+    }
   }
 
   for (const user of usersWithPrefs) {

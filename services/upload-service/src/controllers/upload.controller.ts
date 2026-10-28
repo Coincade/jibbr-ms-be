@@ -3,39 +3,55 @@ import multer from 'multer';
 import { deleteFromSpaces, getSignedSpacesUrl, uploadToSpaces } from '../config/upload.js';
 
 const ALLOWED_MIME_TYPES = new Set([
-  // images
   'image/jpeg',
   'image/jpg',
   'image/png',
-  'image/gif',
-  'image/webp',
-  // documents
   'application/pdf',
-  'text/plain',
   'text/csv',
+  'application/csv',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  // audio / video common chat attachments
+  // Voice notes use the same upload route.
   'audio/mpeg',
   'audio/mp4',
   'audio/wav',
   'audio/webm',
   'audio/ogg',
-  'video/mp4',
-  'video/webm',
-  'video/quicktime',
+  'audio/x-m4a',
 ]);
 
+const SHARE_MAX_SIZE = 2 * 1024 * 1024;
+const SHARE_EXT = /\.(pdf|png|jpe?g|docx?|pptx|xlsx?|csv)$/i;
+
+function shareRejection(file: Express.Multer.File): string | null {
+  const mime = (file.mimetype || '').toLowerCase();
+  if (mime.startsWith('audio/') && /^voice-/i.test(file.originalname || '')) return null;
+  const unknown = mime === '' || mime === 'text/plain' || mime === 'application/octet-stream';
+  const allowed = ALLOWED_MIME_TYPES.has(mime) || (unknown && SHARE_EXT.test(file.originalname || ''));
+  if (!allowed) {
+    return 'Only PDF, PNG, JPEG, Word, PowerPoint, Excel, and CSV files can be shared.';
+  }
+  if (file.size > SHARE_MAX_SIZE) {
+    return `File "${file.originalname}" is too large. Maximum size is 2MB`;
+  }
+  return null;
+}
+
 const fileFilter: multer.Options['fileFilter'] = (_req, file, cb) => {
-  if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+  const mime = (file.mimetype || '').toLowerCase();
+  if (ALLOWED_MIME_TYPES.has(mime) || mime.startsWith('audio/')) {
     cb(null, true);
     return;
   }
-  cb(new Error(`File type not allowed: ${file.mimetype}`));
+  const unknown = mime === '' || mime === 'text/plain' || mime === 'application/octet-stream';
+  if (unknown && SHARE_EXT.test(file.originalname || '')) {
+    cb(null, true);
+    return;
+  }
+  cb(new Error('Only PDF, PNG, JPEG, Word, PowerPoint, Excel, and CSV files can be shared.'));
 };
 
 const upload = multer({
@@ -47,8 +63,8 @@ const upload = multer({
   }
 });
 
-// Profile picture: single image, max 10MB
-const PROFILE_PICTURE_MAX_SIZE = 10 * 1024 * 1024;
+// Profile picture: single image, max 2MB
+const PROFILE_PICTURE_MAX_SIZE = 2 * 1024 * 1024;
 const uploadProfilePicture = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: PROFILE_PICTURE_MAX_SIZE, files: 1 },
@@ -74,11 +90,12 @@ export const uploadFiles = async (req: Request, res: Response): Promise<void> =>
 
     // Upload each file to Digital Ocean Spaces
     for (const file of files) {
-      if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
+      const rejection = shareRejection(file);
+      if (rejection) {
         await Promise.allSettled(uploadedUrls.map((url) => deleteFromSpaces(url)));
         res.status(400).json({
-          message: 'Invalid file type',
-          errors: { files: `File type not allowed: ${file.mimetype}` }
+          message: rejection,
+          errors: { files: rejection }
         });
         return;
       }
@@ -135,7 +152,7 @@ export const uploadFiles = async (req: Request, res: Response): Promise<void> =>
 };
 
 /**
- * Upload single profile picture (image only, max 10MB)
+ * Upload single profile picture (image only, max 2MB)
  * POST /api/upload/profile-picture
  * Field name: file
  */

@@ -399,7 +399,8 @@ export const canUserSendAttachmentsToConversation = async (conversationId: strin
 }
 
 export const isTownhallChannelName = (name?: string | null): boolean => {
-    return (name ?? '').trim().toLowerCase() === 'townhall';
+    const normalized = (name ?? '').trim().toLowerCase();
+    return normalized === 'townhall' || normalized === 'town hall';
 }
 
 export const canUserForwardInTownhall = async (workspaceId: string, userId: string): Promise<boolean> => {

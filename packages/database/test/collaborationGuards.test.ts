@@ -44,6 +44,21 @@ describe('collaborationGuards', () => {
     await expect(canUserMutateSharedChannel(prisma, 'user-1', 'ch-1')).resolves.toBe(false);
   });
 
+  it('denies channel history after the collaborator leaves the shared channel', async () => {
+    const prisma: any = {
+      channelMember: { findFirst: vi.fn().mockResolvedValue(null) },
+      channel: {
+        findUnique: vi.fn().mockResolvedValue({
+          workspaceId: 'host-ws',
+          collaborationId: 'link-1',
+          groupId: null,
+        }),
+      },
+    };
+
+    await expect(canUserReadChannelHistory(prisma, 'ch-1', 'guest-1')).resolves.toBe(false);
+  });
+
   it('denies cross-workspace DM mutation when the collaboration policy is inactive', async () => {
     const prisma: any = {
       conversation: {

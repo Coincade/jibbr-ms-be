@@ -24,6 +24,13 @@ export interface NotificationData {
 
 export class NotificationService {
   private static async getMutedUserIdsForChannel(channelId: string): Promise<Set<string>> {
+    const channel = await prisma.channel.findUnique({
+      where: { id: channelId },
+      select: { name: true },
+    });
+    if ((channel?.name ?? '').trim().toLowerCase() === 'townhall' || (channel?.name ?? '').trim().toLowerCase() === 'town hall') {
+      return new Set();
+    }
     const rows = await prisma.userChannelMute.findMany({
       where: { channelId },
       select: { userId: true },

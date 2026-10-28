@@ -5,6 +5,8 @@ const prisma = vi.hoisted(() => ({
   userRecent: { findMany: vi.fn(), upsert: vi.fn() },
   channel: { findFirst: vi.fn() },
   conversation: { findFirst: vi.fn() },
+  channelMember: { findMany: vi.fn() },
+  conversationParticipant: { findMany: vi.fn() },
 }));
 
 vi.mock('../src/config/database.js', () => ({ default: prisma }));
@@ -37,7 +39,9 @@ describe('recents.controller', () => {
     prisma.member.findFirst.mockResolvedValue({ id: 'm1' });
     prisma.userRecent.findMany.mockResolvedValue([
       { type: 'CHANNEL', targetId: 'c1', lastOpenedAt: new Date('2024-01-01T00:00:00.000Z') },
+      { type: 'CHANNEL', targetId: 'left-collab', lastOpenedAt: new Date('2024-01-02T00:00:00.000Z') },
     ]);
+    prisma.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
     const req: any = { user: { id: 'u1' }, query: { workspaceId: 'w1' } };
     const res = createRes();
 

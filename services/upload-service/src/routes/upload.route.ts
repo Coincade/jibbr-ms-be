@@ -13,7 +13,19 @@ router.post('/files',
 
 router.post('/profile-picture',
   authMiddleware as unknown as RequestHandler,
-  uploadProfilePicture.single('file') as unknown as RequestHandler,
+  ((req, res, next) => {
+    uploadProfilePicture.single('file')(req, res, (err: unknown) => {
+      const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code) : '';
+      if (code === 'LIMIT_FILE_SIZE') {
+        res.status(400).json({
+          message: 'Image must be 2MB or smaller.',
+          errors: { file: 'Image must be 2MB or smaller.' },
+        });
+        return;
+      }
+      next(err);
+    });
+  }) as unknown as RequestHandler,
   uploadProfilePictureFile as unknown as RequestHandler
 );
 

@@ -35,6 +35,9 @@ vi.mock('../src/helpers/domainUtils.js', () => ({ getEmailDomain }));
 vi.mock('../src/services/streams-publisher.service.js', () => ({ publishWorkspaceEvent }));
 vi.mock('../src/helpers/collaborationAccess.js', () => ({ canAccessWorkspaceResource }));
 vi.mock('../src/services/membership-outbox.service.js', () => ({ enqueueMembershipOutboxEvent }));
+vi.mock('../src/helpers/collaborationRevokeCleanup.js', () => ({
+  cleanupUserLeavingWorkspace: vi.fn(async () => {}),
+}));
 
 import {
   createWorkspace,

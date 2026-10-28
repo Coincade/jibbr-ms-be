@@ -9,6 +9,7 @@ import { ZodError } from "zod";
 import { publishWorkspaceEvent } from "../services/streams-publisher.service.js";
 import { canAccessWorkspaceResource } from "../helpers/collaborationAccess.js";
 import { enqueueMembershipOutboxEvent } from "../services/membership-outbox.service.js";
+import { cleanupUserLeavingWorkspace } from "../helpers/collaborationRevokeCleanup.js";
 import { getDiscoverySearchWorkspaceIds } from "../services/search.service.js";
 
 const toWorkspaceSlug = (name: string): string => {
@@ -579,13 +580,16 @@ export const leaveWorkspace = async (req: Request, res: Response) => {
     if (!member) {
       return res.status(422).json({ message: "Member not found" });
     }
-    await prisma.member.update({
-      where: {
-        id: member.id,
-      },
-      data: {
-        isActive: false
-      }
+    await prisma.$transaction(async (tx) => {
+      await tx.member.update({
+        where: {
+          id: member.id,
+        },
+        data: {
+          isActive: false,
+        },
+      });
+      await cleanupUserLeavingWorkspace(tx, user.id, workspace.id);
     });
     return res.status(200).json({ message: "Left workspace successfully" });
   } catch (error) {
