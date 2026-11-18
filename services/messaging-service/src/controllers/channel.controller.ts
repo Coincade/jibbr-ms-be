@@ -46,7 +46,7 @@ function normalizeOptionalText(value?: string) {
 
 function isMediaMimeType(mimeType?: string | null) {
   if (!mimeType) return false;
-  return mimeType.startsWith("image/") || mimeType.startsWith("video/");
+  return mimeType.startsWith("image/");
 }
 
 function extractLinksFromText(content?: string | null) {
