@@ -65,6 +65,26 @@ model User {
   collaborationGroupMembershipsInvited CollaborationGroupMembership[] @relation("GroupMembershipInvitedBy")
   collaborationGroupAuditLogs CollaborationGroupAuditLog[]
   huddleSessionsStarted      HuddleSession[]
+  erpLink                    ErpLink?
+}
+
+/// ERP consent for one Jibbr user. The tokens are not the Jibbr session.
+model ErpLink {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken         String?
+  refreshToken        String?
+  accessExpiresAt     DateTime?
+  employeeExternalId  String?
+  employeeName        String?
+  roleId              String?
+  roleName            String?
+  oauthState          String?   @unique
+  oauthStateExpiresAt DateTime?
+  connectedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 }
 
 model ChannelInvite {
