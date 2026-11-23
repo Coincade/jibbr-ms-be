@@ -277,21 +277,40 @@ jobs:
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
           DEPLOYMENT_ID="${{ steps.deploy_trigger.outputs.DEPLOYMENT_ID }}"
-          echo "Waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID to reach ACTIVE state..."
-          for i in $(seq 1 45); do
-            STATUS=$(doctl apps get-deployment "$APP_ID" "$DEPLOYMENT_ID" --format Phase --no-header 2>/dev/null || echo "UNKNOWN")
-            echo "Attempt $i: $STATUS"
-            if [ "$STATUS" = "ACTIVE" ]; then
-              echo "${{ matrix.service }} is live"
-              exit 0
+          echo "Waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID to reach ACTIVE..."
+          # Text --format Phase can print <nil> and still exit 0. Read phase from JSON.
+          for i in $(seq 1 90); do
+            JSON="$(doctl apps get-deployment "$APP_ID" "$DEPLOYMENT_ID" -o json 2>/tmp/doctl-deployment.err || true)"
+            PHASE="$(printf '%s' "$JSON" | jq -r '
+              if type == "array" then (.[0].phase // empty)
+              elif type == "object" then (.phase // .deployment.phase // empty)
+              else empty end
+            ' 2>/dev/null || true)"
+            if [ -z "$PHASE" ] || [ "$PHASE" = "null" ] || [ "$PHASE" = "<nil>" ]; then
+              echo "Attempt $i: phase unavailable"
+              if [ -z "$JSON" ] && [ -s /tmp/doctl-deployment.err ]; then
+                cat /tmp/doctl-deployment.err
+              fi
+              PHASE=""
+            else
+              echo "Attempt $i: $PHASE"
             fi
-            if [ "$STATUS" = "ERROR" ] || [ "$STATUS" = "CANCELED" ] || [ "$STATUS" = "SUPERSEDED" ]; then
-              echo "${{ matrix.service }} deployment failed with status: $STATUS"
-              exit 1
-            fi
+            case "$PHASE" in
+              ACTIVE)
+                echo "${{ matrix.service }} is live"
+                exit 0
+                ;;
+              ERROR|CANCELED|SUPERSEDED)
+                echo "${{ matrix.service }} deployment failed with status: $PHASE"
+                printf '%s\n' "$JSON" | jq -r '
+                  if type == "array" then .[0] else . end | {phase, cause, progress}
+                ' || true
+                exit 1
+                ;;
+            esac
             sleep 10
           done
-          echo "Timed out waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID"
+          echo "Timed out waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID (last phase: ${PHASE:-unavailable})"
           exit 1
 
   deploy-apps-production:
@@ -364,21 +383,40 @@ jobs:
         run: |
           APP_ID="${{ secrets[matrix.app_id_secret] }}"
           DEPLOYMENT_ID="${{ steps.deploy_trigger.outputs.DEPLOYMENT_ID }}"
-          echo "Waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID to reach ACTIVE state..."
-          for i in $(seq 1 45); do
-            STATUS=$(doctl apps get-deployment "$APP_ID" "$DEPLOYMENT_ID" --format Phase --no-header 2>/dev/null || echo "UNKNOWN")
-            echo "Attempt $i: $STATUS"
-            if [ "$STATUS" = "ACTIVE" ]; then
-              echo "${{ matrix.service }} is live"
-              exit 0
+          echo "Waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID to reach ACTIVE..."
+          # Text --format Phase can print <nil> and still exit 0. Read phase from JSON.
+          for i in $(seq 1 90); do
+            JSON="$(doctl apps get-deployment "$APP_ID" "$DEPLOYMENT_ID" -o json 2>/tmp/doctl-deployment.err || true)"
+            PHASE="$(printf '%s' "$JSON" | jq -r '
+              if type == "array" then (.[0].phase // empty)
+              elif type == "object" then (.phase // .deployment.phase // empty)
+              else empty end
+            ' 2>/dev/null || true)"
+            if [ -z "$PHASE" ] || [ "$PHASE" = "null" ] || [ "$PHASE" = "<nil>" ]; then
+              echo "Attempt $i: phase unavailable"
+              if [ -z "$JSON" ] && [ -s /tmp/doctl-deployment.err ]; then
+                cat /tmp/doctl-deployment.err
+              fi
+              PHASE=""
+            else
+              echo "Attempt $i: $PHASE"
             fi
-            if [ "$STATUS" = "ERROR" ] || [ "$STATUS" = "CANCELED" ] || [ "$STATUS" = "SUPERSEDED" ]; then
-              echo "${{ matrix.service }} deployment failed with status: $STATUS"
-              exit 1
-            fi
+            case "$PHASE" in
+              ACTIVE)
+                echo "${{ matrix.service }} is live"
+                exit 0
+                ;;
+              ERROR|CANCELED|SUPERSEDED)
+                echo "${{ matrix.service }} deployment failed with status: $PHASE"
+                printf '%s\n' "$JSON" | jq -r '
+                  if type == "array" then .[0] else . end | {phase, cause, progress}
+                ' || true
+                exit 1
+                ;;
+            esac
             sleep 10
           done
-          echo "Timed out waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID"
+          echo "Timed out waiting for ${{ matrix.service }} deployment $DEPLOYMENT_ID (last phase: ${PHASE:-unavailable})"
           exit 1
 
   deploy-call-staging:
@@ -437,10 +475,21 @@ jobs:
       - name: Add droplet host key
         run: ssh-keyscan -H "${{ secrets.PRODUCTION_CALL_DROPLET_HOST }}" >> ~/.ssh/known_hosts
 
+      - name: Show deploy key fingerprint
+        run: |
+          echo "Production call deploy key offered by GitHub Actions:"
+          ssh-add -l
+
       - name: Prepare remote dirs and env file
         run: |
           REMOTE="${{ secrets.PRODUCTION_CALL_DROPLET_USER }}@${{ secrets.PRODUCTION_CALL_DROPLET_HOST }}"
-          ssh "$REMOTE" "mkdir -p /opt/jibbr-ms-be/scripts /opt/jibbr-ms-be/services/call-service"
+          if ! ssh -o BatchMode=yes "$REMOTE" "mkdir -p /opt/jibbr-ms-be/scripts /opt/jibbr-ms-be/services/call-service"; then
+            echo "Production call droplet rejected PRODUCTION_CALL_DROPLET_SSH_KEY (publickey)."
+            echo "Key offered:"
+            ssh-add -l || true
+            echo "Install the matching public key in ~/.ssh/authorized_keys for PRODUCTION_CALL_DROPLET_USER on the production droplet."
+            exit 255
+          fi
           printf '%s' '${{ secrets.PRODUCTION_CALL_SERVICE_ENV }}' > /tmp/call-service.env
           scp /tmp/call-service.env "$REMOTE:/opt/jibbr-ms-be/services/call-service/.env"
 

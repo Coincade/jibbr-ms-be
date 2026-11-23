@@ -1,5 +1,8 @@
 import { createClient } from 'redis';
 
+// Managed Redis closes idle TLS sessions after 300s. Ping well inside that window.
+const REDIS_PING_INTERVAL_MS = 60_000;
+
 // Build Redis URL from environment variables
 const buildRedisUrl = (): string => {
   // Support both REDIS_URL format and separate host/port/password
@@ -43,6 +46,7 @@ export const createRedisClients = async () => {
   const pubClient = createClient({
     url: url,
     socket: {
+      pingInterval: REDIS_PING_INTERVAL_MS,
       reconnectStrategy: (retries: number) => {
         if (retries > 10) {
           console.error('❌ Redis connection failed after 10 retries');
@@ -76,6 +80,7 @@ export const createStateRedisClient = async () => {
   const client = createClient({
     url,
     socket: {
+      pingInterval: REDIS_PING_INTERVAL_MS,
       reconnectStrategy: (retries: number) => {
         if (retries > 10) return new Error('Max retries reached');
         const delays = [100, 300, 1000, 3000];
@@ -103,7 +108,10 @@ export const getStateRedisClient = async () => {
 // Stream client for Valkey Streams (socket-service consumers)
 export const createStreamRedisClient = async () => {
   const url = getRedisUrl();
-  const client = createClient({ url: url });
+  const client = createClient({
+    url,
+    socket: { pingInterval: REDIS_PING_INTERVAL_MS },
+  });
   client.on('error', (err: Error) => console.error('❌ Redis Stream Error:', err));
   await client.connect();
   console.log('✅ Redis Stream client connected');

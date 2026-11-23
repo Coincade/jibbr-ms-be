@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { existsSync } from 'fs';
 import dotenv from 'dotenv';
 import path from 'path';
 import { createServer } from 'http';
@@ -12,12 +13,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const envPath = path.join(__dirname, '../.env');
 
-console.log('📁 Loading .env from:', envPath);
-const result = dotenv.config({ path: envPath, override: true });
-if (result.error) {
-  console.error('❌ Failed to load .env:', result.error);
+if (existsSync(envPath)) {
+  console.log('📁 Loading .env from:', envPath);
+  const result = dotenv.config({ path: envPath, override: true });
+  if (result.error) {
+    console.error('❌ Failed to load .env:', result.error);
+  } else {
+    console.log('✅ .env loaded successfully');
+  }
 } else {
-  console.log('✅ .env loaded successfully');
+  console.log(`📁 No .env file at ${envPath}; using process environment`);
 }
 
 const app = createSocketApp({ internalRouter: internalCallRoutes });

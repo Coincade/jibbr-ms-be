@@ -34,7 +34,10 @@ describe('config modules', () => {
     const mod = await import('../src/config/redis.js');
     await mod.createStateRedisClient();
     expect(createClient).toHaveBeenCalledWith(
-      expect.objectContaining({ url: 'redis://example' })
+      expect.objectContaining({
+        url: 'redis://example',
+        socket: expect.objectContaining({ pingInterval: 60_000 }),
+      })
     );
     expect(connect).toHaveBeenCalled();
   });
