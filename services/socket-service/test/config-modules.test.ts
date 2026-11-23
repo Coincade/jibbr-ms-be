@@ -29,16 +29,28 @@ describe('config modules', () => {
   it('redis createStateRedisClient uses REDIS_URL', async () => {
     const on = vi.fn();
     const connect = vi.fn(async () => undefined);
-    createClient.mockReturnValue({ on, connect });
+    const ping = vi.fn(async () => 'PONG');
+    createClient.mockReturnValue({ on, connect, ping });
     process.env.REDIS_URL = 'redis://example';
     const mod = await import('../src/config/redis.js');
     await mod.createStateRedisClient();
     expect(createClient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: 'redis://example',
-        socket: expect.objectContaining({ pingInterval: 60_000 }),
-      })
+      expect.objectContaining({ url: 'redis://example' })
     );
     expect(connect).toHaveBeenCalled();
+  });
+
+  it('redis createStateRedisClient pings before the idle timeout', async () => {
+    vi.useFakeTimers();
+    const on = vi.fn();
+    const connect = vi.fn(async () => undefined);
+    const ping = vi.fn(async () => 'PONG');
+    createClient.mockReturnValue({ on, connect, ping });
+    process.env.REDIS_URL = 'redis://example';
+    const mod = await import('../src/config/redis.js');
+    await mod.createStateRedisClient();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ping).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

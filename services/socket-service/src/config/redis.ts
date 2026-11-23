@@ -1,7 +1,17 @@
 import { createClient } from 'redis';
 
-// Managed Redis closes idle TLS sessions after 300s. Ping well inside that window.
+// Managed Redis closes idle TLS sessions after 300s. node-redis 4.7 has no
+// socket.pingInterval, so send PING well inside that window.
 const REDIS_PING_INTERVAL_MS = 60_000;
+
+const keepRedisAlive = (client: { ping: () => Promise<unknown> }) => {
+  const timer = setInterval(() => {
+    void client.ping().catch((err: unknown) => {
+      console.error('❌ Redis keepalive ping failed:', err);
+    });
+  }, REDIS_PING_INTERVAL_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+};
 
 // Build Redis URL from environment variables
 const buildRedisUrl = (): string => {
@@ -46,7 +56,6 @@ export const createRedisClients = async () => {
   const pubClient = createClient({
     url: url,
     socket: {
-      pingInterval: REDIS_PING_INTERVAL_MS,
       reconnectStrategy: (retries: number) => {
         if (retries > 10) {
           console.error('❌ Redis connection failed after 10 retries');
@@ -68,6 +77,8 @@ export const createRedisClients = async () => {
   subClient.on('ready', () => console.log('✅ Redis Subscriber ready'));
 
   await Promise.all([pubClient.connect(), subClient.connect()]);
+  keepRedisAlive(pubClient);
+  keepRedisAlive(subClient);
 
   console.log('✅ Redis clients connected - WebSocket scaling enabled!');
 
@@ -80,7 +91,6 @@ export const createStateRedisClient = async () => {
   const client = createClient({
     url,
     socket: {
-      pingInterval: REDIS_PING_INTERVAL_MS,
       reconnectStrategy: (retries: number) => {
         if (retries > 10) return new Error('Max retries reached');
         const delays = [100, 300, 1000, 3000];
@@ -90,6 +100,7 @@ export const createStateRedisClient = async () => {
   });
   client.on('error', (err: Error) => console.error('❌ Redis State Error:', err));
   await client.connect();
+  keepRedisAlive(client);
   console.log('✅ Redis State client connected');
   return client;
 };
@@ -108,12 +119,10 @@ export const getStateRedisClient = async () => {
 // Stream client for Valkey Streams (socket-service consumers)
 export const createStreamRedisClient = async () => {
   const url = getRedisUrl();
-  const client = createClient({
-    url,
-    socket: { pingInterval: REDIS_PING_INTERVAL_MS },
-  });
+  const client = createClient({ url });
   client.on('error', (err: Error) => console.error('❌ Redis Stream Error:', err));
   await client.connect();
+  keepRedisAlive(client);
   console.log('✅ Redis Stream client connected');
   return client;
 };
