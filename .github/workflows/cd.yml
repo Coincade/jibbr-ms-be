@@ -12,6 +12,8 @@ env:
   NODE_VERSION: "22"
   REGISTRY: docker.io
   DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
+  # Staging migration runs npm ci on ubuntu-latest (26.04). Playwright 1.58 cannot download Chromium there.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
 
 jobs:
   changes:
