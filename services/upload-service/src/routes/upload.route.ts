@@ -1,4 +1,4 @@
-import express, { RequestHandler, Request, Response } from 'express';
+import express, { NextFunction, RequestHandler, Request, Response } from 'express';
 import { uploadFiles, getUploadProgress, upload, uploadProfilePictureFile, uploadProfilePicture } from '../controllers/upload.controller.js';
 import { getSignedSpacesUrl } from '../config/upload.js';
 import authMiddleware from '../middleware/Auth.middleware.js';
@@ -13,7 +13,7 @@ router.post('/files',
 
 router.post('/profile-picture',
   authMiddleware as unknown as RequestHandler,
-  ((req, res, next) => {
+  ((req: Request, res: Response, next: NextFunction) => {
     uploadProfilePicture.single('file')(req, res, (err: unknown) => {
       const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code) : '';
       if (code === 'LIMIT_FILE_SIZE') {

@@ -35,7 +35,12 @@ vi.mock('../src/services/membership-outbox.service.js', () => ({ enqueueMembersh
 import {
   acceptGroupInvite,
   createGroup,
+  createGroupSharedChannel,
+  getGroup,
   inviteWorkspace,
+  listGroups,
+  rejectGroupInvite,
+  revokeGroupMembership,
 } from '../src/controllers/collaboration-group.controller.js';
 
 function createRes() {
@@ -106,5 +111,99 @@ describe('collaboration-group.controller', () => {
       })
     );
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('rejectGroupInvite returns 403 when the caller is not a workspace admin', async () => {
+    isWorkspaceAdmin.mockResolvedValue(false);
+    const req: any = { user: { id: 'u1' }, params: { id: 'g1' }, body: { workspaceId: 'w2' } };
+    const res = createRes();
+    await rejectGroupInvite(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('rejectGroupInvite revokes a pending invitation', async () => {
+    isWorkspaceAdmin.mockResolvedValue(true);
+    prisma.collaborationGroupMembership.findUnique.mockResolvedValue({ id: 'mem1', status: 'INVITED' });
+    prisma.collaborationGroupMembership.update.mockResolvedValue({ id: 'mem1', status: 'REVOKED' });
+    prisma.collaborationGroupMembership.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'g1' }, body: { workspaceId: 'w2' } };
+    const res = createRes();
+    await rejectGroupInvite(req, res);
+    expect(prisma.collaborationGroupMembership.update).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('revokeGroupMembership returns 400 when ids are missing', async () => {
+    const req: any = { user: { id: 'u1' }, params: { id: ' ', workspaceId: '' } };
+    const res = createRes();
+    await revokeGroupMembership(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('revokeGroupMembership returns 404 when the group has no owner', async () => {
+    prisma.collaborationGroupMembership.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'g1', workspaceId: 'w2' } };
+    const res = createRes();
+    await revokeGroupMembership(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Group not found' });
+  });
+
+  it('listGroups returns groups for the caller workspaces', async () => {
+    prisma.member.findMany.mockResolvedValue([{ workspaceId: 'w1' }]);
+    prisma.collaborationGroup.findMany.mockResolvedValue([{ id: 'g1' }]);
+    const req: any = { user: { id: 'u1' } };
+    const res = createRes();
+    await listGroups(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('getGroup returns 404 when the group does not exist', async () => {
+    prisma.member.findMany.mockResolvedValue([{ workspaceId: 'w1' }]);
+    prisma.collaborationGroup.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'g1' } };
+    const res = createRes();
+    await getGroup(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('getGroup returns the group when the caller workspace is a member', async () => {
+    prisma.member.findMany.mockResolvedValue([{ workspaceId: 'w1' }]);
+    prisma.collaborationGroup.findFirst.mockResolvedValue({
+      id: 'g1',
+      memberships: [{ workspaceId: 'w1', status: 'ACTIVE' }],
+    });
+    const req: any = { user: { id: 'u1' }, params: { id: 'g1' } };
+    const res = createRes();
+    await getGroup(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('createGroupSharedChannel returns 404 when the group is not active', async () => {
+    prisma.collaborationGroup.findFirst.mockResolvedValue(null);
+    const req: any = {
+      user: { id: 'u1' },
+      params: { id: 'g1' },
+      body: { name: 'shared', ownerWorkspaceId: 'w1' },
+    };
+    const res = createRes();
+    await createGroupSharedChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('createGroupSharedChannel returns 403 when the policy disables shared channels', async () => {
+    prisma.collaborationGroup.findFirst.mockResolvedValue({
+      id: 'g1',
+      policy: { allowSharedChannels: false },
+      memberships: [{ workspaceId: 'w1', role: 'OWNER' }],
+    });
+    const req: any = {
+      user: { id: 'u1' },
+      params: { id: 'g1' },
+      body: { name: 'shared', ownerWorkspaceId: 'w1' },
+    };
+    const res = createRes();
+    await createGroupSharedChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
   });
 });

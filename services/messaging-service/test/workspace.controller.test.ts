@@ -16,7 +16,7 @@ const prisma = vi.hoisted(() => ({
     cb({
       channelMember: { createMany: prisma.channelMember.createMany },
       channel: { findMany: prisma.channel.findMany },
-      member: { create: prisma.member.create },
+      member: { create: prisma.member.create, update: prisma.member.update },
     })
   ),
 }));
@@ -41,9 +41,17 @@ vi.mock('../src/helpers/collaborationRevokeCleanup.js', () => ({
 
 import {
   createWorkspace,
+  getAllWorkspaces,
+  getAllWorkspacesForUser,
+  getPublicChannels,
+  getWorkspace,
+  getWorkspaceMembers,
   hardDeleteWorkspace,
+  joinWorkspace,
   joinWorkspaceByCode,
+  leaveWorkspace,
   softDeleteWorkspace,
+  updateMemberRole,
   updateWorkspace,
 } from '../src/controllers/workspace.controller.js';
 
@@ -133,6 +141,138 @@ describe('workspace.controller', () => {
     const req: any = { user: { id: 'u1' }, params: { id: 'w1' }, body: { DELETE_PASS: 'bad' } };
     const res = createRes();
     await hardDeleteWorkspace(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('getAllWorkspaces returns 422 when the user is missing', async () => {
+    const req: any = { user: undefined };
+    const res = createRes();
+    await getAllWorkspaces(req, res);
+    expect(res.status).toHaveBeenCalledWith(422);
+  });
+
+  it('getAllWorkspaces returns active workspaces', async () => {
+    prisma.workspace.findMany.mockResolvedValue([{ id: 'w1' }]);
+    const req: any = { user: { id: 'u1' } };
+    const res = createRes();
+    await getAllWorkspaces(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Workspaces fetched successfully' })
+    );
+  });
+
+  it('getWorkspace returns the workspace payload', async () => {
+    prisma.workspace.findFirst.mockResolvedValue({ id: 'w1' });
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' } };
+    const res = createRes();
+    await getWorkspace(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('getAllWorkspacesForUser returns an empty list when the user has none', async () => {
+    prisma.workspace.findMany.mockResolvedValue([]);
+    prisma.workspace.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1', email: 'a@org.com' } };
+    const res = createRes();
+    await getAllWorkspacesForUser(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('getWorkspaceMembers returns 403 when the caller cannot access the workspace', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'w1' });
+    canAccessWorkspaceResource.mockResolvedValue(false);
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' } };
+    const res = createRes();
+    await getWorkspaceMembers(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('getWorkspaceMembers returns members the caller can see', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'w1' });
+    canAccessWorkspaceResource.mockResolvedValue(true);
+    prisma.member.findMany.mockResolvedValue([{ id: 'm1' }]);
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' } };
+    const res = createRes();
+    await getWorkspaceMembers(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('joinWorkspace returns 422 when the workspace or code does not match', async () => {
+    prisma.workspace.findUnique.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' }, body: { joinCode: '123456' } };
+    const res = createRes();
+    await joinWorkspace(req, res);
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Workspace not found' })
+    );
+  });
+
+  it('joinWorkspace creates a member when the code matches', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'w1' });
+    prisma.member.findFirst.mockResolvedValue(null);
+    prisma.member.create.mockResolvedValue({ id: 'm1' });
+    prisma.channel.findMany.mockResolvedValue([]);
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' }, body: { joinCode: '123456' } };
+    const res = createRes();
+    await joinWorkspace(req, res);
+    expect(prisma.member.create).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('leaveWorkspace returns 422 when the caller is not a member', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'w1' });
+    prisma.member.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' } };
+    const res = createRes();
+    await leaveWorkspace(req, res);
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Member not found' });
+  });
+
+  it('leaveWorkspace deactivates the membership', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'w1' });
+    prisma.member.findFirst.mockResolvedValue({ id: 'm1' });
+    prisma.member.update.mockResolvedValue({});
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' } };
+    const res = createRes();
+    await leaveWorkspace(req, res);
+    expect(prisma.member.update).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('getPublicChannels returns 422 when the workspace is missing', async () => {
+    prisma.workspace.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' } };
+    const res = createRes();
+    await getPublicChannels(req, res);
+    expect(res.status).toHaveBeenCalledWith(422);
+  });
+
+  it('getPublicChannels returns public channels for a member', async () => {
+    prisma.workspace.findFirst.mockResolvedValue({ id: 'w1' });
+    prisma.member.findFirst.mockResolvedValue({ id: 'm1' });
+    prisma.channel.findMany.mockResolvedValue([{ id: 'c1', name: 'general' }]);
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1' } };
+    const res = createRes();
+    await getPublicChannels(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('updateMemberRole returns 400 for an unknown role', async () => {
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1', memberId: 'm2' }, body: { role: 'OWNER' } };
+    const res = createRes();
+    await updateMemberRole(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('updateMemberRole returns 403 when the caller is not an admin', async () => {
+    prisma.workspace.findFirst.mockResolvedValue({ id: 'w1', userId: 'owner' });
+    prisma.member.findFirst.mockResolvedValue({ role: 'MEMBER' });
+    const req: any = { user: { id: 'u1' }, params: { id: 'w1', memberId: 'm2' }, body: { role: 'ADMIN' } };
+    const res = createRes();
+    await updateMemberRole(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
   });
 });

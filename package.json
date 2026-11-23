@@ -20,7 +20,7 @@
     "dev:all": "turbo run dev --filter='./services/*'",
     "start": "turbo run start",
     "test": "turbo run test",
-    "test:unit": "turbo run test:unit --filter='./services/*'",
+    "test:unit": "turbo run test:unit --filter='./services/*' --filter='./packages/*'",
     "test:integration": "turbo run test:e2e --filter='./services/*'",
     "test:e2e": "turbo run test:e2e --filter='./services/*'",
     "lint": "turbo run lint",

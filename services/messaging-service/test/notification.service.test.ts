@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prisma = vi.hoisted(() => ({
+  channel: { findUnique: vi.fn() },
   userNotification: { create: vi.fn() },
   channelMember: { update: vi.fn(), findMany: vi.fn() },
   conversationReadStatus: { upsert: vi.fn(), findMany: vi.fn() },
@@ -79,6 +80,7 @@ describe('notification.service', () => {
   });
 
   it('notifyNewChannelMessage increments unread for allowed users and respects mute/notify rules', async () => {
+    prisma.channel.findUnique.mockResolvedValue({ name: 'general' });
     prisma.channelMember.findMany.mockResolvedValue([
       {
         userId: 'u2',

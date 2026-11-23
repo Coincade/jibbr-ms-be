@@ -45,7 +45,7 @@ vi.mock('bcrypt', () => {
 vi.mock('uuid', () => ({ v4: vi.fn() }));
 
 vi.mock('jsonwebtoken', () => {
-  return { default: { sign: vi.fn() } };
+  return { default: { sign: vi.fn(), verify: vi.fn() } };
 });
 
 vi.mock('../../src/jobs/EmailJob.js', () => {
@@ -76,6 +76,7 @@ import {
   getUser,
   login,
   logout,
+  refreshAccessToken,
   register,
   resendVerificationEmail,
   verifyEmail,
@@ -533,6 +534,79 @@ describe('Auth Controller Testing', () => {
       );
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({ message: 'Verification email sent' });
+    });
+  });
+
+  describe('refreshAccessToken', () => {
+    it('returns 401 when no token is present', async () => {
+      const req = createReq({ headers: {} });
+      const res = createRes();
+      await refreshAccessToken(req as any, res as any);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 401 when jwt.verify throws', async () => {
+      (jwt.verify as any).mockImplementation(() => {
+        throw new Error('bad');
+      });
+      const req = createReq({ headers: { authorization: 'Bearer raw-token' } });
+      const res = createRes();
+      await refreshAccessToken(req as any, res as any);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 401 when the token expired more than 30 days ago', async () => {
+      const exp = Math.floor(Date.now() / 1000) - 31 * 24 * 60 * 60;
+      (jwt.verify as any).mockReturnValue({ id: 'u1', tv: 0, exp });
+      const req = createReq({ headers: { authorization: 'Bearer raw-token' } });
+      const res = createRes();
+      await refreshAccessToken(req as any, res as any);
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect((prisma as any).user.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 when the token version does not match', async () => {
+      (jwt.verify as any).mockReturnValue({ id: 'u1', tv: 0 });
+      (prisma as any).user.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Ada',
+        email: 'a@b.com',
+        tokenVersion: 2,
+        email_verified_at: null,
+        email_verify_token: null,
+      });
+      const req = createReq({ headers: { authorization: 'Bearer raw-token' } });
+      const res = createRes();
+      await refreshAccessToken(req as any, res as any);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns a new bearer token when the session is still valid', async () => {
+      (jwt.verify as any).mockReturnValue({ id: 'u1', tv: 1, name: 'Ada', email: 'a@b.com' });
+      (jwt.sign as any).mockReturnValue('new-token');
+      (prisma as any).user.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Ada',
+        email: 'a@b.com',
+        tokenVersion: 1,
+        email_verified_at: new Date('2026-01-01T00:00:00.000Z'),
+        email_verify_token: null,
+      });
+      const req = createReq({ headers: { authorization: 'Bearer raw-token' } });
+      const res = createRes();
+      await refreshAccessToken(req as any, res as any);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Token refreshed',
+          data: expect.objectContaining({
+            id: 'u1',
+            tv: 1,
+            token: 'Bearer new-token',
+            emailVerified: true,
+          }),
+        })
+      );
     });
   });
 

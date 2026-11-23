@@ -11,6 +11,7 @@ const PrismaClient = vi.hoisted(() =>
 );
 
 const prismaMock = vi.hoisted(() => ({
+  $queryRaw: vi.fn(async () => [{ tokenVersion: 0 }]),
   user: {
     findUnique: vi.fn(async () => ({ tokenVersion: 0 })),
   },
@@ -43,6 +44,7 @@ describe('websocket utils', () => {
     vi.clearAllMocks();
     process.env.JWT_SECRET = 'secret';
     prismaMock.user.findUnique.mockResolvedValue({ tokenVersion: 0 });
+    prismaMock.$queryRaw.mockResolvedValue([{ tokenVersion: 0 }]);
   });
 
   it('authenticateSocket returns decoded payload', async () => {
@@ -59,7 +61,7 @@ describe('websocket utils', () => {
 
   it('authenticateSocket returns null when tokenVersion mismatches', async () => {
     verify.mockReturnValue({ id: 'u1', tv: 0 });
-    prismaMock.user.findUnique.mockResolvedValue({ tokenVersion: 3 });
+    prismaMock.$queryRaw.mockResolvedValue([{ tokenVersion: 3 }]);
     await expect(authenticateSocket('token')).resolves.toBeNull();
   });
 

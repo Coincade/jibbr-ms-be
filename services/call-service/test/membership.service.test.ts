@@ -68,4 +68,43 @@ describe('membership.service', () => {
       'You are not a participant in this conversation'
     );
   });
+
+  it('assertChannelMember resolves when the user can read the channel', async () => {
+    canUserReadChannelHistory.mockResolvedValue(true);
+    const { assertChannelMember } = await import('../src/services/membership.service.js');
+    await expect(assertChannelMember('user-1', 'channel-1')).resolves.toBeUndefined();
+    expect(canUserReadChannelHistory).toHaveBeenCalled();
+  });
+
+  it('assertChannelMember rejects when the user cannot read the channel', async () => {
+    canUserReadChannelHistory.mockResolvedValue(false);
+    const { assertChannelMember } = await import('../src/services/membership.service.js');
+    await expect(assertChannelMember('user-1', 'channel-1')).rejects.toThrow(
+      'You are not a member of this channel'
+    );
+  });
+
+  it('assertConversationParticipant resolves for a local conversation', async () => {
+    prisma.conversationParticipant.findFirst.mockResolvedValue({ id: 'cp-1' });
+    prisma.conversation.findUnique.mockResolvedValue({
+      workspaceId: 'w1',
+      collaborationId: null,
+      groupId: null,
+    });
+    const { assertConversationParticipant } = await import('../src/services/membership.service.js');
+    await expect(assertConversationParticipant('user-1', 'cv-1')).resolves.toBeUndefined();
+  });
+
+  it('assertConversationParticipant rejects when the user is not a participant', async () => {
+    prisma.conversationParticipant.findFirst.mockResolvedValue(null);
+    prisma.conversation.findUnique.mockResolvedValue({
+      workspaceId: 'w1',
+      collaborationId: null,
+      groupId: null,
+    });
+    const { assertConversationParticipant } = await import('../src/services/membership.service.js');
+    await expect(assertConversationParticipant('user-1', 'cv-1')).rejects.toThrow(
+      'You are not a participant in this conversation'
+    );
+  });
 });

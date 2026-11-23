@@ -17,6 +17,9 @@ vi.mock('../src/services/streams-publisher.service.js', () => ({ publishUserStat
 import {
   getMe,
   getMyStatus,
+  getUserProfile,
+  getUserStatus,
+  searchCollaborators,
   searchUsers,
   updateMe,
   updateMyStatus,
@@ -111,5 +114,76 @@ describe('user.controller', () => {
       expect.objectContaining({ data: { timezone: 'Asia/Kolkata' } })
     );
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('searchCollaborators returns 403 when the caller is not in the workspace', async () => {
+    prisma.member.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, query: { workspaceId: 'w1' } };
+    const res = createRes();
+    await searchCollaborators(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('searchCollaborators returns an empty page when there are no links', async () => {
+    prisma.member.findFirst.mockResolvedValue({ id: 'm1' });
+    prisma.workspaceCollaboration.findMany.mockResolvedValue([]);
+    prisma.collaborationGroupMembership.findMany.mockResolvedValue([]);
+    prisma.member.findMany.mockResolvedValue([]);
+    const req: any = { user: { id: 'u1' }, query: { workspaceId: 'w1' } };
+    const res = createRes();
+    await searchCollaborators(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Collaborators fetched successfully' })
+    );
+  });
+
+  it('getUserProfile returns 404 when the target user does not exist', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { userId: 'u2' } };
+    const res = createRes();
+    await getUserProfile(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('getUserProfile returns the caller own profile', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u1',
+      name: 'Ada',
+      email: 'a@b.com',
+      image: null,
+      timezone: null,
+      phone: null,
+      employeeId: null,
+      birthday: null,
+      designation: null,
+    });
+    const req: any = { user: { id: 'u1' }, params: { userId: 'u1' } };
+    const res = createRes();
+    await getUserProfile(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('getUserStatus returns 404 when the target user does not exist', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { userId: 'u2' } };
+    const res = createRes();
+    await getUserStatus(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('getUserStatus returns the caller own status', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      presenceStatus: 'available',
+      customStatusMessage: '',
+      timezone: null,
+    });
+    const req: any = { user: { id: 'u1' }, params: { userId: 'u1' } };
+    const res = createRes();
+    await getUserStatus(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'User status fetched successfully' })
+    );
   });
 });

@@ -14,11 +14,17 @@ const prisma = vi.hoisted(() => ({
 
 vi.mock('../src/config/database.js', () => ({ default: prisma }));
 vi.mock('@jibbr/database', () => ({ filterUnreadChannelRowsForUser: vi.fn((_p, _u, rows) => Promise.resolve(rows)) }));
-vi.mock('../src/helper.js', () => ({ formatError: vi.fn(() => ({ field: 'invalid' })) }));
+vi.mock('../src/helper.js', () => ({
+  formatError: vi.fn(() => ({ field: 'invalid' })),
+  isTownhallChannelName: vi.fn(() => false),
+}));
 
 import {
+  getChannelMutes,
   getNotificationPreferences,
+  getUnreadCounts,
   getUserNotifications,
+  markAllNotificationsAsRead,
   markAsRead,
   markNotificationAsRead,
   registerPushToken,
@@ -103,5 +109,58 @@ describe('notification.controller', () => {
     await unregisterPushToken(unregReq, res);
     expect(prisma.userPushToken.upsert).toHaveBeenCalled();
     expect(prisma.userPushToken.deleteMany).toHaveBeenCalled();
+  });
+
+  it('getUnreadCounts returns 422 when the user is missing', async () => {
+    const req: any = { user: undefined, query: {} };
+    const res = createRes();
+    await getUnreadCounts(req, res);
+    expect(res.status).toHaveBeenCalledWith(422);
+  });
+
+  it('getUnreadCounts returns zeros when there is no activity', async () => {
+    prisma.channelMember.findMany.mockResolvedValue([]);
+    prisma.conversationReadStatus.findMany.mockResolvedValue([]);
+    const req: any = { user: { id: 'u1' }, query: {} };
+    const res = createRes();
+    await getUnreadCounts(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Unread counts fetched successfully' })
+    );
+  });
+
+  it('markAllNotificationsAsRead marks every unread row', async () => {
+    prisma.userNotification.updateMany.mockResolvedValue({ count: 2 });
+    const req: any = { user: { id: 'u1' } };
+    const res = createRes();
+    await markAllNotificationsAsRead(req, res);
+    expect(prisma.userNotification.updateMany).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ message: 'All notifications marked as read' });
+  });
+
+  it('getChannelMutes returns 403 when the caller is not a workspace member', async () => {
+    prisma.member.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, query: { workspaceId: 'w1' } };
+    const res = createRes();
+    await getChannelMutes(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('getChannelMutes returns muted channel ids', async () => {
+    prisma.member.findFirst.mockResolvedValue({ id: 'm1' });
+    prisma.userChannelMute.findMany.mockResolvedValue([
+      { channelId: 'c1', channel: { name: 'general' } },
+    ]);
+    const req: any = { user: { id: 'u1' }, query: { workspaceId: 'w1' } };
+    const res = createRes();
+    await getChannelMutes(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { channelIds: ['c1'] },
+      })
+    );
   });
 });

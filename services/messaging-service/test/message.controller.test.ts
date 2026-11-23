@@ -12,6 +12,7 @@ const prisma = vi.hoisted(() => ({
   member: { findFirst: vi.fn() },
   reaction: { findUnique: vi.fn(), create: vi.fn(), delete: vi.fn() },
   forwardedMessage: { findMany: vi.fn(), count: vi.fn() },
+  messageMention: { findMany: vi.fn() },
 }));
 
 const helper = vi.hoisted(() => ({
@@ -56,12 +57,15 @@ vi.mock('../src/helpers/collaborationAccess.js', () => collabAccess);
 import {
   buildForwardedContent,
   deleteMessage,
+  forwardMessage,
+  getMentions,
   getMessage,
   getMessages,
   getForwardedMessages,
   reactToMessage,
   removeReaction,
   sendMessage,
+  sendMessageWithAttachments,
   updateMessage,
 } from '../src/controllers/message.controller.js';
 
@@ -265,6 +269,52 @@ describe('message.controller', () => {
       expect.objectContaining({
         message: 'Forwarded messages fetched successfully',
       })
+    );
+  });
+
+  it('sendMessageWithAttachments returns 403 when the user is not a channel member', async () => {
+    prisma.channelMember.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, body: { content: 'hello', channelId: 'c1' } };
+    const res = createRes();
+    await sendMessageWithAttachments(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('sendMessageWithAttachments returns 201 when the member can post', async () => {
+    prisma.channelMember.findFirst.mockResolvedValue({ id: 'cm1' });
+    helper.canUserSendAttachmentsToChannel.mockResolvedValue(true);
+    prisma.message.create.mockResolvedValue({ id: 'm1', content: 'hello' });
+    const req: any = { user: { id: 'u1' }, body: { content: 'hello', channelId: 'c1' } };
+    const res = createRes();
+    await sendMessageWithAttachments(req, res);
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('forwardMessage returns 404 when the original message is missing', async () => {
+    prisma.message.findUnique.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, body: { messageId: 'm1', channelId: 'c2' } };
+    const res = createRes();
+    await forwardMessage(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Original message not found' });
+  });
+
+  it('getMentions returns 400 for an invalid cursor', async () => {
+    const req: any = { user: { id: 'u1' }, query: { cursor: 'not-a-date:mention1' } };
+    const res = createRes();
+    await getMentions(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Invalid cursor' });
+  });
+
+  it('getMentions returns an empty page when there are no mentions', async () => {
+    prisma.messageMention.findMany.mockResolvedValue([]);
+    const req: any = { user: { id: 'u1' }, query: {} };
+    const res = createRes();
+    await getMentions(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Mentions fetched successfully' })
     );
   });
 });

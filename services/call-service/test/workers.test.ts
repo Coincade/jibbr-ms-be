@@ -79,4 +79,19 @@ describe('mediasoup workers', () => {
     expect(stats.pids).not.toContain(101);
     expect(stats.roomsByWorker).toEqual({ '202': 0, '303': 0 });
   });
+
+  it('clears the room count for a worker and reports its pid', async () => {
+    process.env.MEDIASOUP_NUM_WORKERS = '1';
+    const worker = buildWorker(404);
+    createWorkerMock.mockResolvedValueOnce(worker);
+
+    const workersModule = await import('../src/mediasoup/workers.js');
+    await workersModule.initMediasoupWorkers();
+    workersModule.trackRoomOnWorker(404);
+    workersModule.trackRoomOnWorker(404);
+    workersModule.clearRoomsForWorker(404);
+
+    expect(workersModule.getMediasoupWorkerStats().roomsByWorker).toEqual({ '404': 0 });
+    expect(workersModule.getWorkerPid(worker as any)).toBe(404);
+  });
 });

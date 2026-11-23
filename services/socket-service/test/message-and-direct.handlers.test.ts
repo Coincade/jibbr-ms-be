@@ -297,4 +297,107 @@ describe('message/direct handlers - critical error paths', () => {
       })
     );
   });
+
+  it('handleForwardMessage emits an auth error when the socket has no user', async () => {
+    const { handleForwardMessage } = await import('../src/websocket/handlers/message.handler.js');
+    const socket = createSocket(false);
+    await handleForwardMessage(socket, { messageId: 'm1', targetChannelId: 'c2' } as any, new Map());
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ message: 'User not authenticated' })
+    );
+  });
+
+  it('handleForwardMessage emits an error when the original message is missing', async () => {
+    const { handleForwardMessage } = await import('../src/websocket/handlers/message.handler.js');
+    const socket = createSocket(true);
+    prisma.message.findUnique.mockResolvedValueOnce(null);
+    await handleForwardMessage(socket, { messageId: 'm1', targetChannelId: 'c2' } as any, new Map());
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ message: 'Original message not found' })
+    );
+  });
+
+  it('handleForwardDirectMessage emits an error when the caller is not in the target conversation', async () => {
+    const { handleForwardDirectMessage } = await import(
+      '../src/websocket/handlers/direct-message.handler.js'
+    );
+    const socket = createSocket(true);
+    validateConversationParticipation.mockResolvedValueOnce(false);
+    await handleForwardDirectMessage(
+      socket,
+      { messageId: 'm1', targetConversationId: 'cv2' } as any,
+      new Map()
+    );
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ message: 'You are not a participant of the target conversation' })
+    );
+  });
+
+  it('handleAddDirectReaction acks a duplicate add as a noop', async () => {
+    const { handleAddDirectReaction } = await import(
+      '../src/websocket/handlers/direct-message.handler.js'
+    );
+    const socket = createSocket(true);
+    validateConversationParticipation.mockResolvedValue(true);
+    isCollaborationDmMutationAllowed.mockResolvedValue(true);
+    prisma.message.findUnique.mockResolvedValue({ id: 'm1', conversationId: 'cv1' });
+    prisma.reaction.create.mockRejectedValue({ code: 'P2002' });
+    prisma.reaction.findFirst.mockResolvedValue({
+      id: 'r1',
+      emoji: ':+1:',
+      messageId: 'm1',
+      userId: 'u1',
+    });
+    await handleAddDirectReaction(
+      socket,
+      { conversationId: 'cv1', messageId: 'm1', emoji: ':+1:', clientOpId: 'op-r1' } as any,
+      new Map()
+    );
+    expect(socket.emit).toHaveBeenCalledWith(
+      'direct_reaction_added_ack',
+      expect.objectContaining({ clientOpId: 'op-r1', reactionId: 'r1', noop: true })
+    );
+  });
+
+  it('handleRemoveDirectReaction acks when the reaction is removed', async () => {
+    const { handleRemoveDirectReaction } = await import(
+      '../src/websocket/handlers/direct-message.handler.js'
+    );
+    const socket = createSocket(true);
+    validateConversationParticipation.mockResolvedValue(true);
+    isCollaborationDmMutationAllowed.mockResolvedValue(true);
+    prisma.message.findUnique.mockResolvedValue({ id: 'm1', conversationId: 'cv1' });
+    prisma.reaction.deleteMany.mockResolvedValue({ count: 1 });
+    await handleRemoveDirectReaction(
+      socket,
+      { conversationId: 'cv1', messageId: 'm1', emoji: ':+1:', clientOpId: 'op-rm' } as any,
+      new Map()
+    );
+    expect(socket.emit).toHaveBeenCalledWith(
+      'direct_reaction_removed_ack',
+      expect.objectContaining({ clientOpId: 'op-rm', conversationId: 'cv1' })
+    );
+  });
+
+  it('handleRemoveDirectReaction emits an error when the message is missing', async () => {
+    const { handleRemoveDirectReaction } = await import(
+      '../src/websocket/handlers/direct-message.handler.js'
+    );
+    const socket = createSocket(true);
+    validateConversationParticipation.mockResolvedValue(true);
+    isCollaborationDmMutationAllowed.mockResolvedValue(true);
+    prisma.message.findUnique.mockResolvedValue(null);
+    await handleRemoveDirectReaction(
+      socket,
+      { conversationId: 'cv1', messageId: 'm1', emoji: ':+1:' } as any,
+      new Map()
+    );
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ message: 'Message not found' })
+    );
+  });
 });

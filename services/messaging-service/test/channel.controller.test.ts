@@ -41,13 +41,20 @@ vi.mock('../src/services/membership-outbox.service.js', () => ({ enqueueMembersh
 vi.mock('../src/helpers/collaborationAccess.js', () => ({ isWorkspaceAdmin }));
 
 import {
+  acceptBridgeInvite,
+  addMemberToChannel,
   checkInviteEmailRegistered,
   createChannel,
   createBridgeChannel,
+  getBridgeChannels,
+  getChannel,
   getWorkspaceChannels,
   hardDeleteChannel,
+  inviteToBridgeChannel,
   joinChannel,
+  removeMemberFromChannel,
   softDeleteChannel,
+  updateChannel,
 } from '../src/controllers/channel.controller.js';
 
 function createRes() {
@@ -174,5 +181,156 @@ describe('channel.controller', () => {
     const res = createRes();
     await createBridgeChannel(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('getChannel returns 404 when the channel does not exist', async () => {
+    prisma.channel.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'c1' } };
+    const res = createRes();
+    await getChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Channel not found' });
+  });
+
+  it('getChannel returns 403 when the user is not a channel member', async () => {
+    prisma.channel.findFirst.mockResolvedValue({
+      id: 'c1',
+      workspaceId: 'w1',
+      isBridgeChannel: false,
+      collaborationId: null,
+      groupId: null,
+      members: [],
+    });
+    prisma.member.findFirst.mockResolvedValue({ id: 'm1' });
+    const req: any = { user: { id: 'u1' }, params: { id: 'c1' } };
+    const res = createRes();
+    await getChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({ message: 'You are not a member of this channel' });
+  });
+
+  it('addMemberToChannel returns 404 when the channel does not exist', async () => {
+    prisma.channel.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, body: { userId: 'u2', channelId: 'c1' } };
+    const res = createRes();
+    await addMemberToChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('addMemberToChannel returns 422 when the requester is missing', async () => {
+    const req: any = { user: undefined, body: { userId: 'u2', channelId: 'c1' } };
+    const res = createRes();
+    await addMemberToChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(422);
+  });
+
+  it('removeMemberFromChannel returns 404 when the target is not a member', async () => {
+    prisma.channel.findFirst.mockResolvedValue({ id: 'c1', workspaceId: 'w1', channelAdminId: 'owner' });
+    prisma.channelMember.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { channelId: 'c1' }, body: { userId: 'u2' } };
+    const res = createRes();
+    await removeMemberFromChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ message: 'User is not a member of this channel' });
+  });
+
+  it('removeMemberFromChannel returns 400 when the creator tries to leave', async () => {
+    prisma.channel.findFirst.mockResolvedValue({ id: 'c1', workspaceId: 'w1', channelAdminId: 'u1' });
+    prisma.channelMember.findFirst.mockResolvedValue({ id: 'cm1', userId: 'u1' });
+    const req: any = { user: { id: 'u1' }, params: { channelId: 'c1' }, body: { userId: 'u1' } };
+    const res = createRes();
+    await removeMemberFromChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('updateChannel returns 404 when the channel does not exist', async () => {
+    prisma.channel.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'c1' }, body: { name: 'renamed' } };
+    const res = createRes();
+    await updateChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('updateChannel updates the channel for a workspace admin', async () => {
+    prisma.channel.findFirst.mockResolvedValue({
+      id: 'c1',
+      workspaceId: 'w1',
+      channelAdminId: 'owner',
+    });
+    prisma.member.findFirst.mockResolvedValue({ role: 'ADMIN' });
+    prisma.channel.update.mockResolvedValue({ id: 'c1', name: 'renamed' });
+    const req: any = { user: { id: 'u1' }, params: { id: 'c1' }, body: { name: 'renamed' } };
+    const res = createRes();
+    await updateChannel(req, res);
+    expect(prisma.channel.update).toHaveBeenCalled();
+    expect(publishChannelEvent).toHaveBeenCalledWith('channel.updated', { id: 'c1', name: 'renamed' });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('inviteToBridgeChannel returns 404 when the bridge channel is missing', async () => {
+    prisma.channel.findFirst.mockResolvedValue(null);
+    const req: any = {
+      user: { id: 'u1' },
+      params: { channelId: 'c1' },
+      body: { inviteeEmail: 'guest@example.com' },
+    };
+    const res = createRes();
+    await inviteToBridgeChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Bridge channel not found' });
+  });
+
+  it('inviteToBridgeChannel returns 403 when the requester is not the creator', async () => {
+    prisma.channel.findFirst.mockResolvedValue({ id: 'c1', channelAdminId: 'owner' });
+    const req: any = {
+      user: { id: 'u1' },
+      params: { channelId: 'c1' },
+      body: { inviteeEmail: 'guest@example.com' },
+    };
+    const res = createRes();
+    await inviteToBridgeChannel(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('acceptBridgeInvite returns 400 for an invalid token', async () => {
+    prisma.channelInvite.findFirst.mockResolvedValue(null);
+    const req: any = { body: { token: 'missing' } };
+    const res = createRes();
+    await acceptBridgeInvite(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('acceptBridgeInvite returns 400 when the invitee has no account', async () => {
+    prisma.channelInvite.findFirst.mockResolvedValue({
+      id: 'inv1',
+      inviteeEmail: 'guest@example.com',
+      channelId: 'c1',
+    });
+    prisma.user.findUnique.mockResolvedValue(null);
+    const req: any = { body: { token: 'tok' } };
+    const res = createRes();
+    await acceptBridgeInvite(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Create an account first' })
+    );
+  });
+
+  it('getBridgeChannels returns 422 when the user is missing', async () => {
+    const req: any = { user: undefined };
+    const res = createRes();
+    await getBridgeChannels(req, res);
+    expect(res.status).toHaveBeenCalledWith(422);
+  });
+
+  it('getBridgeChannels returns the caller bridge channels', async () => {
+    prisma.channel.findMany.mockResolvedValue([{ id: 'c1' }]);
+    const req: any = { user: { id: 'u1' } };
+    const res = createRes();
+    await getBridgeChannels(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Bridge channels fetched successfully' })
+    );
   });
 });

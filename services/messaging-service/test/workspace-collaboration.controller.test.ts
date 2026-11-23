@@ -46,6 +46,10 @@ import {
   createCollaborationRequest,
   createExternalDirectMessage,
   createSharedChannel,
+  getCollaborationRequestInbox,
+  getCollaborationRequestOutbox,
+  listWorkspaceCollaborations,
+  rejectCollaborationRequest,
   revokeCollaborationLink,
 } from '../src/controllers/workspace-collaboration.controller.js';
 
@@ -221,6 +225,66 @@ describe('workspace-collaboration.controller', () => {
     expect(cleanupPairwiseCollaborationArtifacts).toHaveBeenCalled();
     expect(prisma.collaborationAuditLog.create).toHaveBeenCalled();
     expect(streams.publishCollaborationInvalidate).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('getCollaborationRequestInbox returns 401 when the user is missing', async () => {
+    const req: any = { user: undefined };
+    const res = createRes();
+    await getCollaborationRequestInbox(req, res);
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('getCollaborationRequestInbox returns requests for admin workspaces', async () => {
+    prisma.member.findMany.mockResolvedValue([{ workspaceId: 'w1' }]);
+    prisma.workspaceCollaborationRequest.findMany.mockResolvedValue([{ id: 'r1' }]);
+    const req: any = { user: { id: 'u1' } };
+    const res = createRes();
+    await getCollaborationRequestInbox(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('getCollaborationRequestOutbox returns the caller requests', async () => {
+    prisma.workspaceCollaborationRequest.findMany.mockResolvedValue([]);
+    const req: any = { user: { id: 'u1' } };
+    const res = createRes();
+    await getCollaborationRequestOutbox(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('rejectCollaborationRequest returns 404 when the request is missing', async () => {
+    prisma.workspaceCollaborationRequest.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { id: 'r1' } };
+    const res = createRes();
+    await rejectCollaborationRequest(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('rejectCollaborationRequest rejects a pending request for an admin', async () => {
+    prisma.workspaceCollaborationRequest.findFirst.mockResolvedValue({
+      id: 'r1',
+      status: 'PENDING',
+      targetWorkspaceId: 'w2',
+      requestingWorkspaceId: 'w1',
+    });
+    collabAccess.isWorkspaceAdmin.mockResolvedValue(true);
+    prisma.workspaceCollaborationRequest.update.mockResolvedValue({ id: 'r1', status: 'REJECTED' });
+    prisma.workspace.findUnique.mockResolvedValue({ name: 'Target' });
+    const req: any = { user: { id: 'u1' }, params: { id: 'r1' } };
+    const res = createRes();
+    await rejectCollaborationRequest(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Collaboration request rejected' })
+    );
+  });
+
+  it('listWorkspaceCollaborations returns links for the caller workspaces', async () => {
+    prisma.member.findMany.mockResolvedValue([{ workspaceId: 'w1' }]);
+    prisma.workspaceCollaboration.findMany.mockResolvedValue([{ id: 'l1' }]);
+    const req: any = { user: { id: 'u1' } };
+    const res = createRes();
+    await listWorkspaceCollaborations(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
   });
 });

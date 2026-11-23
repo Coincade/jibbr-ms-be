@@ -21,9 +21,11 @@ vi.mock('@jibbr/database', () => ({
 }));
 
 import {
+  canAccessViaGroup,
   canAccessWorkspaceResource,
   canUserReadConversationHistory,
   getActiveUserWorkspaceIds,
+  isCollaborationFileSharingAllowed,
   isPolicyAllowedForResource,
   isWorkspaceAdmin,
 } from '../src/helpers/collaborationAccess.js';
@@ -89,5 +91,29 @@ describe('helpers/collaborationAccess', () => {
     prisma.member.findFirst.mockResolvedValue(null);
 
     await expect(canUserReadConversationHistory('cv1', 'u1')).resolves.toBe(false);
+  });
+
+  it('canAccessViaGroup is true when a group policy allows the resource', async () => {
+    prisma.collaborationGroup.findMany.mockResolvedValue([
+      { policy: { allowExternalDiscovery: true, allowCrossWorkspaceDm: false, allowSharedChannels: true } },
+    ]);
+    await expect(canAccessViaGroup(['w1'], 'w2', 'channel')).resolves.toBe(true);
+  });
+
+  it('canAccessViaGroup is false when no group matches', async () => {
+    prisma.collaborationGroup.findMany.mockResolvedValue([]);
+    await expect(canAccessViaGroup(['w1'], 'w2', 'channel')).resolves.toBe(false);
+  });
+
+  it('isCollaborationFileSharingAllowed reads the active link policy', async () => {
+    prisma.workspaceCollaboration.findFirst.mockResolvedValue({
+      policy: { allowFileSharing: true },
+    });
+    await expect(isCollaborationFileSharingAllowed('link-1')).resolves.toBe(true);
+  });
+
+  it('isCollaborationFileSharingAllowed is false when the link is missing', async () => {
+    prisma.workspaceCollaboration.findFirst.mockResolvedValue(null);
+    await expect(isCollaborationFileSharingAllowed('missing')).resolves.toBe(false);
   });
 });

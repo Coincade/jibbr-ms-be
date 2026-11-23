@@ -155,4 +155,22 @@ describe('rooms', () => {
       expect.objectContaining({ active: false, roomId: 'room-2' })
     );
   });
+
+  it('closes only the rooms that belong to a dead worker', async () => {
+    getPersistedRoomMock.mockResolvedValue(null);
+    endHuddleSessionRecordMock.mockResolvedValue(0);
+    resolveWorkspaceIdForRoomMock.mockResolvedValue(null);
+    getNextWorkerMock
+      .mockReturnValueOnce({ pid: 321, createRouter: vi.fn().mockResolvedValue(makeRouter()) })
+      .mockReturnValueOnce({ pid: 999, createRouter: vi.fn().mockResolvedValue(makeRouter()) });
+
+    const rooms = await import('../src/mediasoup/rooms.js');
+    await rooms.getOrCreateRoom('room-dead');
+    await rooms.getOrCreateRoom('room-live');
+
+    await rooms.closeRoomsOnWorker(321);
+
+    expect(rooms.getRoom('room-dead')).toBeUndefined();
+    expect(rooms.getRoom('room-live')).toBeDefined();
+  });
 });

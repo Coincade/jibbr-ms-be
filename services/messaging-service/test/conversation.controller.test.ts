@@ -44,10 +44,12 @@ vi.mock('../src/libs/htmlToCleanText.js', () => ({ htmlToCleanText: vi.fn((s: st
 
 import {
   deleteDirectMessage,
+  forwardToDirectMessage,
   getConversationMessages,
   getOrCreateConversation,
   getUserConversations,
   sendDirectMessage,
+  sendDirectMessageWithAttachments,
 } from '../src/controllers/conversation.controller.js';
 
 function createRes() {
@@ -137,5 +139,39 @@ describe('conversation.controller', () => {
     const res = createRes();
     await getUserConversations(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('forwardToDirectMessage returns 403 when the caller is not a participant', async () => {
+    prisma.conversationParticipant.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { conversationId: 'cv1' }, body: { messageId: 'm1' } };
+    const res = createRes();
+    await forwardToDirectMessage(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('forwardToDirectMessage returns 404 when the original message is missing', async () => {
+    prisma.conversationParticipant.findFirst.mockResolvedValue({ id: 'p1' });
+    prisma.message.findUnique.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { conversationId: 'cv1' }, body: { messageId: 'm1' } };
+    const res = createRes();
+    await forwardToDirectMessage(req, res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Original message not found' });
+  });
+
+  it('sendDirectMessageWithAttachments returns 400 when content is missing', async () => {
+    const req: any = { user: { id: 'u1' }, params: { conversationId: 'cv1' }, body: {} };
+    const res = createRes();
+    await sendDirectMessageWithAttachments(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Message content is required' });
+  });
+
+  it('sendDirectMessageWithAttachments returns 403 when the caller is not a participant', async () => {
+    prisma.conversationParticipant.findFirst.mockResolvedValue(null);
+    const req: any = { user: { id: 'u1' }, params: { conversationId: 'cv1' }, body: { content: 'hello' } };
+    const res = createRes();
+    await sendDirectMessageWithAttachments(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
   });
 });
