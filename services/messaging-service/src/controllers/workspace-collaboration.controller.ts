@@ -540,12 +540,18 @@ export const createSharedChannel = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "ownerWorkspaceId must belong to the collaboration pair" });
     }
 
-    const [isAdminInA, isAdminInB] = await Promise.all([
-      isWorkspaceAdmin(user.id, link.workspaceAId),
-      isWorkspaceAdmin(user.id, link.workspaceBId),
-    ]);
-    if (!isAdminInA && !isAdminInB) {
-      return res.status(403).json({ message: "Only linked workspace admins can create shared channels" });
+    const ownerMember = await prisma.member.findFirst({
+      where: {
+        userId: user.id,
+        workspaceId: payload.ownerWorkspaceId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+    if (!ownerMember) {
+      return res.status(403).json({
+        message: "You must be an active member of this workspace to create a shared channel",
+      });
     }
 
     const channel = await prisma.$transaction(async (tx) => {

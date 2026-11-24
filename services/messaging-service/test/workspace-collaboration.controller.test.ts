@@ -5,7 +5,7 @@ const prisma = vi.hoisted(() => ({
   workspaceCollaborationRequest: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), update: vi.fn() },
   workspaceCollaboration: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), update: vi.fn(), findUniqueOrThrow: vi.fn() },
   collaborationPolicy: { create: vi.fn() },
-  member: { findMany: vi.fn() },
+  member: { findMany: vi.fn(), findFirst: vi.fn() },
   collaborationAuditLog: { create: vi.fn() },
   channel: { create: vi.fn() },
   conversation: { findFirst: vi.fn(), create: vi.fn() },
@@ -181,7 +181,7 @@ describe('workspace-collaboration.controller', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  it('createSharedChannel creates a shared channel and enqueues membership sync', async () => {
+  it('createSharedChannel creates a shared channel for an active member who is not an admin', async () => {
     prisma.workspaceCollaboration.findFirst.mockResolvedValue({
       id: 'l1',
       status: 'ACTIVE',
@@ -189,7 +189,8 @@ describe('workspace-collaboration.controller', () => {
       workspaceBId: 'w2',
       policy: { allowSharedChannels: true },
     });
-    collabAccess.isWorkspaceAdmin.mockResolvedValue(true);
+    collabAccess.isWorkspaceAdmin.mockResolvedValue(false);
+    prisma.member.findFirst.mockResolvedValue({ id: 'm1' });
     prisma.channel.create.mockResolvedValue({ id: 'ch-1', workspaceId: 'w1' });
 
     const req: any = {
@@ -201,10 +202,34 @@ describe('workspace-collaboration.controller', () => {
 
     await createSharedChannel(req, res);
 
+    expect(collabAccess.isWorkspaceAdmin).not.toHaveBeenCalled();
     expect(prisma.channel.create).toHaveBeenCalled();
     expect(enqueueMembershipOutboxEvent).toHaveBeenCalled();
     expect(streams.publishChannelEvent).toHaveBeenCalledWith('channel.created', { id: 'ch-1', workspaceId: 'w1' });
     expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('createSharedChannel returns 403 when the caller is not a member of the owner workspace', async () => {
+    prisma.workspaceCollaboration.findFirst.mockResolvedValue({
+      id: 'l1',
+      status: 'ACTIVE',
+      workspaceAId: 'w1',
+      workspaceBId: 'w2',
+      policy: { allowSharedChannels: true },
+    });
+    prisma.member.findFirst.mockResolvedValue(null);
+
+    const req: any = {
+      user: { id: 'u1' },
+      params: { id: 'l1' },
+      body: { name: 'shared', ownerWorkspaceId: 'w1' },
+    };
+    const res = createRes();
+
+    await createSharedChannel(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(prisma.channel.create).not.toHaveBeenCalled();
   });
 
   it('revokeCollaborationLink revokes the link and runs cleanup', async () => {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prisma = vi.hoisted(() => ({
-  member: { findFirst: vi.fn() },
+  member: { findFirst: vi.fn(), findMany: vi.fn() },
   channel: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), update: vi.fn(), delete: vi.fn() },
   channelMember: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn() },
   collaborationGroup: { findFirst: vi.fn() },
@@ -222,6 +222,93 @@ describe('channel.controller', () => {
     const res = createRes();
     await addMemberToChannel(req, res);
     expect(res.status).toHaveBeenCalledWith(422);
+  });
+
+  it('addMemberToChannel lets a non-admin member add someone from another network workspace', async () => {
+    prisma.channel.findFirst.mockResolvedValue({
+      id: 'c1',
+      workspaceId: 'w1',
+      isBridgeChannel: false,
+      collaborationId: null,
+      groupId: 'g1',
+      channelAdminId: 'someone-else',
+    });
+    prisma.channelMember.findFirst.mockReset();
+    prisma.channelMember.findFirst
+      .mockResolvedValueOnce({ id: 'cm-self' })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    prisma.collaborationGroupMembership.findMany.mockResolvedValue([
+      { workspaceId: 'w1' },
+      { workspaceId: 'w2' },
+    ]);
+    prisma.member.findMany.mockResolvedValue([{ workspaceId: 'w2' }]);
+    prisma.channelMember.create.mockResolvedValue({ id: 'cm-new', userId: 'u-admin', channelId: 'c1' });
+    isWorkspaceAdmin.mockResolvedValue(false);
+
+    const req: any = { user: { id: 'u-member' }, body: { userId: 'u-admin', channelId: 'c1' } };
+    const res = createRes();
+    await addMemberToChannel(req, res);
+
+    expect(isWorkspaceAdmin).not.toHaveBeenCalled();
+    expect(prisma.channelMember.create).toHaveBeenCalledWith({
+      data: { userId: 'u-admin', channelId: 'c1', isExternal: true },
+    });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('addMemberToChannel lets a non-admin member add someone from a partner workspace', async () => {
+    prisma.channel.findFirst.mockResolvedValue({
+      id: 'c1',
+      workspaceId: 'w1',
+      isBridgeChannel: false,
+      collaborationId: 'link-1',
+      groupId: null,
+      channelAdminId: 'someone-else',
+    });
+    prisma.channelMember.findFirst.mockReset();
+    prisma.channelMember.findFirst
+      .mockResolvedValueOnce({ id: 'cm-self' })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    prisma.workspaceCollaboration.findFirst.mockResolvedValue({
+      id: 'link-1',
+      status: 'ACTIVE',
+      workspaceAId: 'w1',
+      workspaceBId: 'w2',
+      policy: { allowSharedChannels: true },
+    });
+    prisma.member.findMany.mockResolvedValue([{ workspaceId: 'w2' }]);
+    prisma.channelMember.create.mockResolvedValue({ id: 'cm-new', userId: 'u-mod', channelId: 'c1' });
+
+    const req: any = { user: { id: 'u-member' }, body: { userId: 'u-mod', channelId: 'c1' } };
+    const res = createRes();
+    await addMemberToChannel(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(prisma.channelMember.create).toHaveBeenCalledWith({
+      data: { userId: 'u-mod', channelId: 'c1', isExternal: true },
+    });
+  });
+
+  it('addMemberToChannel still blocks a non-admin member from adding people to a bridge channel', async () => {
+    prisma.channel.findFirst.mockResolvedValue({
+      id: 'c1',
+      workspaceId: 'w1',
+      isBridgeChannel: true,
+      collaborationId: null,
+      groupId: null,
+      channelAdminId: 'owner',
+    });
+    prisma.channelMember.findFirst.mockResolvedValue({ id: 'cm-self' });
+    isWorkspaceAdmin.mockResolvedValue(false);
+
+    const req: any = { user: { id: 'u-member' }, body: { userId: 'u2', channelId: 'c1' } };
+    const res = createRes();
+    await addMemberToChannel(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(prisma.channelMember.create).not.toHaveBeenCalled();
   });
 
   it('removeMemberFromChannel returns 404 when the target is not a member', async () => {

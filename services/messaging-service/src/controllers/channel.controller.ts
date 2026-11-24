@@ -346,7 +346,9 @@ async function buildChannelDetailPayload(channelId: string, userId: string) {
   const isWorkspaceAdmin = currentUserRole === "ADMIN" || currentUserRole === "MODERATOR";
   const isProtectedChannel = ["general", "townhall"].includes(channel.name.toLowerCase());
   const canEdit = !isProtectedChannel && (isChannelCreator || isWorkspaceAdmin);
-  const canManageMembers = !isProtectedChannel && (isChannelCreator || isWorkspaceAdmin);
+  // Partner and network channels: any member can add people from the linked workspaces.
+  const canManageMembers =
+    !isProtectedChannel && (isChannelCreator || isWorkspaceAdmin || isFederatedChannel);
   const canLeave = !isProtectedChannel && !isChannelCreator;
 
   return {
@@ -748,25 +750,18 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
       }
 
       const sourceWorkspaceId = targetChannel.workspaceId;
-      const isChannelCreator = targetChannel.channelAdminId === user.id;
-      const isSourceWorkspaceAdmin = await isWorkspaceAdmin(user.id, sourceWorkspaceId);
+      const isPartnerOrNetworkChannel = Boolean(targetChannel.collaborationId || targetChannel.groupId);
 
-      let isCounterpartWorkspaceAdmin = false;
       let policyAllowsSharedChannels = false;
       let candidateWorkspaceIds: string[] = [sourceWorkspaceId];
 
       if (targetChannel.groupId) {
-        // Group channel: all ACTIVE member workspaces are candidates
+        // Network channel: any active workspace in the group can contribute members.
         const groupMemberships = await prisma.collaborationGroupMembership.findMany({
           where: { groupId: targetChannel.groupId, status: "ACTIVE" },
           select: { workspaceId: true },
         });
         candidateWorkspaceIds = groupMemberships.map((m) => m.workspaceId);
-        // Check if caller is an admin in any member workspace
-        const adminChecks = await Promise.all(
-          candidateWorkspaceIds.map((wsId) => isWorkspaceAdmin(user.id, wsId))
-        );
-        isCounterpartWorkspaceAdmin = adminChecks.some(Boolean);
         policyAllowsSharedChannels = true; // policy was checked at group channel creation
       } else if (targetChannel.collaborationId) {
         const collaboration = await prisma.workspaceCollaboration.findFirst({
@@ -778,17 +773,21 @@ export const addMemberToChannel = async (req: Request, res: Response) => {
             collaboration.workspaceAId === sourceWorkspaceId
               ? collaboration.workspaceBId
               : collaboration.workspaceAId;
-          isCounterpartWorkspaceAdmin = await isWorkspaceAdmin(user.id, counterpartWorkspaceId);
           policyAllowsSharedChannels = collaboration.policy.allowSharedChannels;
           candidateWorkspaceIds = [sourceWorkspaceId, counterpartWorkspaceId];
         }
       }
 
-      if (!isChannelCreator && !isSourceWorkspaceAdmin && !isCounterpartWorkspaceAdmin) {
-        return res.status(403).json({
-          message:
-            "Only channel creator or linked workspace admins can add members to this shared channel",
-        });
+      // Bridge channels stay limited to the creator or a workspace admin.
+      // Partner and network channels follow normal private channels: any member can add.
+      if (!isPartnerOrNetworkChannel) {
+        const isChannelCreator = targetChannel.channelAdminId === user.id;
+        const isSourceWorkspaceAdmin = await isWorkspaceAdmin(user.id, sourceWorkspaceId);
+        if (!isChannelCreator && !isSourceWorkspaceAdmin) {
+          return res.status(403).json({
+            message: "Only channel creator or workspace admins can add members to this bridge channel",
+          });
+        }
       }
 
       if (targetChannel.collaborationId && !policyAllowsSharedChannels) {

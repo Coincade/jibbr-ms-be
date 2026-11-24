@@ -7,7 +7,7 @@ const prisma = vi.hoisted(() => ({
   collaborationGroupAuditLog: { create: vi.fn() },
   workspace: { findFirst: vi.fn(), findUnique: vi.fn() },
   channel: { create: vi.fn() },
-  member: { findMany: vi.fn() },
+  member: { findMany: vi.fn(), findFirst: vi.fn() },
   $transaction: vi.fn(async (cb: any) => cb({
     collaborationGroupMembership: { update: prisma.collaborationGroupMembership.update },
     channel: { create: prisma.channel.create },
@@ -205,5 +205,57 @@ describe('collaboration-group.controller', () => {
     const res = createRes();
     await createGroupSharedChannel(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('createGroupSharedChannel creates a channel for an active member who is not an admin', async () => {
+    prisma.collaborationGroup.findFirst.mockResolvedValue({
+      id: 'g1',
+      policy: { allowSharedChannels: true },
+      memberships: [
+        { workspaceId: 'w1', role: 'OWNER', status: 'ACTIVE' },
+        { workspaceId: 'w2', role: 'MEMBER', status: 'ACTIVE' },
+      ],
+    });
+    isWorkspaceAdmin.mockResolvedValue(false);
+    prisma.member.findFirst.mockResolvedValue({ id: 'm-member' });
+    prisma.channel.create.mockResolvedValue({ id: 'ch-1', workspaceId: 'w2' });
+    prisma.collaborationGroupMembership.findMany.mockResolvedValue([
+      { workspaceId: 'w1' },
+      { workspaceId: 'w2' },
+    ]);
+
+    const req: any = {
+      user: { id: 'u-member' },
+      params: { id: 'g1' },
+      body: { name: 'org-room', ownerWorkspaceId: 'w2' },
+    };
+    const res = createRes();
+
+    await createGroupSharedChannel(req, res);
+
+    expect(isWorkspaceAdmin).not.toHaveBeenCalled();
+    expect(prisma.channel.create).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('createGroupSharedChannel returns 403 when the caller is not a member of the owner workspace', async () => {
+    prisma.collaborationGroup.findFirst.mockResolvedValue({
+      id: 'g1',
+      policy: { allowSharedChannels: true },
+      memberships: [{ workspaceId: 'w1', role: 'OWNER', status: 'ACTIVE' }],
+    });
+    prisma.member.findFirst.mockResolvedValue(null);
+
+    const req: any = {
+      user: { id: 'u-outsider' },
+      params: { id: 'g1' },
+      body: { name: 'org-room', ownerWorkspaceId: 'w1' },
+    };
+    const res = createRes();
+
+    await createGroupSharedChannel(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(prisma.channel.create).not.toHaveBeenCalled();
   });
 });
