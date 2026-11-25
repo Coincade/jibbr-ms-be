@@ -15,6 +15,7 @@ import {
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from "../services/mention.service.js"; // [mentions]
 import { htmlToCleanText } from "../libs/htmlToCleanText.js";
 import { shareFileRejection } from "../libs/shareable-file.js";
+import { fileSharePolicyForChannel } from "../libs/workspace-file-policy.js";
 import { publishMessageCreatedEvent, publishMessageUpdatedEvent, publishMessageDeletedEvent } from "../services/streams-publisher.service.js";
 import {
   sendMessageSchema,
@@ -225,8 +226,9 @@ export const sendMessageWithAttachments = async (req: Request, res: Response) =>
     // Upload attachments if any
     const attachments = [];
     if (req.files && Array.isArray(req.files)) {
+      const sharePolicy = await fileSharePolicyForChannel(payload.channelId);
       for (const file of req.files) {
-        const rejection = shareFileRejection(file);
+        const rejection = shareFileRejection(file, sharePolicy);
         if (rejection) {
           return res.status(400).json({ message: rejection });
         }

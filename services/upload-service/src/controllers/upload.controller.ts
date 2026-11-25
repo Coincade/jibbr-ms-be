@@ -1,68 +1,33 @@
 import { Request, Response } from 'express';
 import multer from 'multer';
 import { deleteFromSpaces, getSignedSpacesUrl, uploadToSpaces } from '../config/upload.js';
+import {
+  FILE_SHARE_TYPE_IDS,
+  normalizeFileSharePolicy,
+  shareFileRejection,
+  type FileSharePolicy,
+} from '@jibbr/shared-utils';
+import prisma from '../config/database.js';
 
-const ALLOWED_MIME_TYPES = new Set([
-  'image/jpeg',
-  'image/jpg',
-  'image/png',
-  'application/pdf',
-  'text/csv',
-  'application/csv',
-  'application/msword',
-  'application/vnd.ms-word',
-  'application/x-msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  // Voice notes use the same upload route.
-  'audio/mpeg',
-  'audio/mp4',
-  'audio/wav',
-  'audio/webm',
-  'audio/ogg',
-  'audio/x-m4a',
-]);
+const ANY_SHARE_POLICY: FileSharePolicy = { maxMb: 20, types: [...FILE_SHARE_TYPE_IDS] };
 
-const SHARE_MAX_SIZE = 2 * 1024 * 1024;
-const SHARE_EXT = /\.(pdf|png|jpe?g|docx?|pptx|xlsx?|csv)$/i;
-const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|wmv|flv|3gp|3gpp|ogv)$/i;
-
-function shareRejection(file: Express.Multer.File): string | null {
-  const mime = (file.mimetype || '').toLowerCase();
-  if (mime.startsWith('audio/') && /^voice-/i.test(file.originalname || '')) return null;
-  if (mime.startsWith('video/') || VIDEO_EXT.test(file.originalname || '')) {
-    return "Video files can't be shared.";
-  }
-  const unknown = mime === '' || mime === 'text/plain' || mime === 'application/octet-stream';
-  const allowed = ALLOWED_MIME_TYPES.has(mime) || (unknown && SHARE_EXT.test(file.originalname || ''));
-  if (!allowed) {
-    return 'Only PDF, PNG, JPEG, DOC, DOCX, PowerPoint, Excel, and CSV files can be shared.';
-  }
-  if (file.size > SHARE_MAX_SIZE) {
-    return `File "${file.originalname}" is too large. Maximum size is 2MB`;
-  }
-  return null;
+function shareRejection(file: Express.Multer.File, policy: FileSharePolicy): string | null {
+  return shareFileRejection(
+    { mimetype: file.mimetype, originalname: file.originalname, size: file.size },
+    policy
+  );
 }
 
 const fileFilter: multer.Options['fileFilter'] = (_req, file, cb) => {
-  const mime = (file.mimetype || '').toLowerCase();
-  const voiceNote = mime.startsWith('audio/') && /^voice-/i.test(file.originalname || '');
-  if (!voiceNote && (mime.startsWith('video/') || VIDEO_EXT.test(file.originalname || ''))) {
-    cb(new Error("Video files can't be shared."));
+  const rejection = shareFileRejection(
+    { mimetype: file.mimetype, originalname: file.originalname, size: 1 },
+    ANY_SHARE_POLICY
+  );
+  if (rejection) {
+    cb(new Error(rejection));
     return;
   }
-  if (ALLOWED_MIME_TYPES.has(mime) || mime.startsWith('audio/')) {
-    cb(null, true);
-    return;
-  }
-  const unknown = mime === '' || mime === 'text/plain' || mime === 'application/octet-stream';
-  if (unknown && SHARE_EXT.test(file.originalname || '')) {
-    cb(null, true);
-    return;
-  }
-  cb(new Error('Only PDF, PNG, JPEG, DOC, DOCX, PowerPoint, Excel, and CSV files can be shared.'));
+  cb(null, true);
 };
 
 const upload = multer({
@@ -81,6 +46,32 @@ const uploadProfilePicture = multer({
   limits: { fileSize: PROFILE_PICTURE_MAX_SIZE, files: 1 },
 });
 
+class UploadPolicyError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function resolveUploadPolicy(req: Request): Promise<FileSharePolicy> {
+  const workspaceId = typeof req.query?.workspaceId === 'string' ? req.query.workspaceId.trim() : '';
+  if (!workspaceId) return normalizeFileSharePolicy(null);
+  const userId = (req as Request & { user?: { id?: string } }).user?.id;
+  if (!userId) throw new UploadPolicyError(401, 'Unauthorized');
+  const member = await prisma.member.findFirst({
+    where: { userId, workspaceId, isActive: true },
+    select: { id: true },
+  });
+  if (!member) throw new UploadPolicyError(403, 'You are not a member of this workspace');
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { fileUploadMaxMb: true, allowedFileTypes: true },
+  });
+  if (!workspace) throw new UploadPolicyError(404, 'Workspace not found');
+  return normalizeFileSharePolicy(workspace);
+}
+
 /**
  * Upload files and return file references
  * POST /api/upload/files
@@ -98,10 +89,11 @@ export const uploadFiles = async (req: Request, res: Response): Promise<void> =>
     const files = req.files as Express.Multer.File[];
     const uploadedFiles = [];
     const uploadedUrls: string[] = [];
+    const sharePolicy = await resolveUploadPolicy(req);
 
     // Upload each file to Digital Ocean Spaces
     for (const file of files) {
-      const rejection = shareRejection(file);
+      const rejection = shareRejection(file, sharePolicy);
       if (rejection) {
         await Promise.allSettled(uploadedUrls.map((url) => deleteFromSpaces(url)));
         res.status(400).json({
@@ -146,6 +138,13 @@ export const uploadFiles = async (req: Request, res: Response): Promise<void> =>
     });
 
   } catch (error) {
+    if (error instanceof UploadPolicyError) {
+      res.status(error.status).json({
+        message: error.message,
+        errors: { files: error.message },
+      });
+      return;
+    }
     console.error('Upload error:', error);
     const message = error instanceof Error ? error.message : 'Internal server error';
     if (message.startsWith('File type not allowed')) {

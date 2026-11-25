@@ -103,6 +103,8 @@ model Workspace {
   isActive               Boolean   @default(true)
   deletedAt              DateTime?
   fileAttachmentsEnabled Boolean   @default(true)
+  fileUploadMaxMb        Int       @default(2)
+  allowedFileTypes       String[]  @default(["images", "pdf", "word", "spreadsheets", "presentations"])
   channels               Channel[]
   members                Member[]
   conversations          Conversation[]

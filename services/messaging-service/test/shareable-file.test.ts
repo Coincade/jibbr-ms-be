@@ -10,11 +10,11 @@ describe('shareFileRejection', () => {
 
   it('rejects video by mime type and by extension', () => {
     expect(shareFileRejection({ mimetype: 'video/mp4', originalname: 'clip.mp4', size: 100 })).toBe(
-      "Video files can't be shared."
+      "Video files can't be shared in this workspace."
     );
     expect(
       shareFileRejection({ mimetype: 'application/octet-stream', originalname: 'clip.mp4', size: 100 })
-    ).toBe("Video files can't be shared.");
+    ).toBe("Video files can't be shared in this workspace.");
   });
 
   it('allows an unknown mime type when the extension is a shareable document', () => {
@@ -25,7 +25,7 @@ describe('shareFileRejection', () => {
 
   it('rejects a file type that cannot be shared', () => {
     expect(shareFileRejection({ mimetype: 'application/zip', originalname: 'bundle.zip', size: 100 })).toBe(
-      'Only PDF, PNG, JPEG, DOC, DOCX, PowerPoint, Excel, and CSV files can be shared.'
+      "Other files can't be shared in this workspace."
     );
   });
 

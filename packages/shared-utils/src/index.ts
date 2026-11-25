@@ -39,6 +39,20 @@ export {
 } from './desktop-version';
 
 export {
+  FILE_SHARE_TYPE_IDS,
+  FILE_UPLOAD_SIZE_OPTIONS,
+  DEFAULT_ALLOWED_FILE_TYPES,
+  defaultFileSharePolicy,
+  isFileUploadSizeMb,
+  normalizeFileSharePolicy,
+  mergeFileSharePolicies,
+  shareFileRejection,
+  type FileShareTypeId,
+  type FileUploadSizeMb,
+  type FileSharePolicy,
+} from './file-share-policy';
+
+export {
   createDesktopVersionMiddleware,
   handleDesktopVersionStatus,
   type LocalsDesktopVersion,

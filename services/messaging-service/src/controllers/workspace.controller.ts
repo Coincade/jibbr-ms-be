@@ -609,7 +609,7 @@ export const updateWorkspace = async (req: Request, res: Response) => {
     }
 
     const workspaceId = req.params.id;
-    const { name, fileAttachmentsEnabled, image } = req.body;
+    const { name, fileAttachmentsEnabled, image, fileUploadMaxMb, allowedFileTypes } = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Name is required" });
@@ -650,6 +650,26 @@ export const updateWorkspace = async (req: Request, res: Response) => {
     }
     if (image !== undefined && (isWorkspaceCreator || isAdmin)) {
       updateData.image = image;
+    }
+
+    const attachmentsWillBeOn =
+      fileAttachmentsEnabled === true ||
+      (fileAttachmentsEnabled === undefined && wk.fileAttachmentsEnabled !== false);
+    if (attachmentsWillBeOn && (isWorkspaceCreator || isAdmin)) {
+      if (fileUploadMaxMb !== undefined) {
+        const maxMb = Number(fileUploadMaxMb);
+        if (![2, 5, 10, 20].includes(maxMb)) {
+          return res.status(400).json({ message: 'Upload size must be 2MB, 5MB, 10MB, or 20MB' });
+        }
+        updateData.fileUploadMaxMb = maxMb;
+      }
+      if (allowedFileTypes !== undefined) {
+        if (!Array.isArray(allowedFileTypes) || allowedFileTypes.some((type) => typeof type !== 'string')) {
+          return res.status(400).json({ message: 'Choose which file types can be shared' });
+        }
+        const allowed = ['images', 'pdf', 'word', 'spreadsheets', 'presentations', 'video', 'other'];
+        updateData.allowedFileTypes = allowed.filter((type) => allowedFileTypes.includes(type));
+      }
     }
 
     const workspace = await prisma.workspace.update({

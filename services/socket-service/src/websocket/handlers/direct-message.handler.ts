@@ -25,6 +25,7 @@ import {
   isTownhallChannelName,
 } from '../../helper.js';
 import { htmlToCleanText } from '../../libs/htmlToCleanText.js';
+import { attachmentShareRejection, fileSharePolicyForConversation } from '../../libs/workspace-file-policy.js';
 
 /**
  * Handle send direct message event
@@ -134,6 +135,9 @@ export const handleSendDirectMessage = async (
       if (!canSendAttachments) {
         throw new Error('File attachments are disabled for this conversation');
       }
+      const sharePolicy = await fileSharePolicyForConversation(data.conversationId);
+      const rejection = attachmentShareRejection(data.attachments, sharePolicy);
+      if (rejection) throw new Error(rejection);
     }
 
     const userInfo = await getUserInfo(socket.data.user.id);

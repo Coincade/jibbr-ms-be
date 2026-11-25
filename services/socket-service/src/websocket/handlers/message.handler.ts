@@ -15,6 +15,7 @@ import {
 } from '../../helper.js';
 import { processMentions, createMentionsAndNotifications, updateMentionsForMessage } from '../../services/mention.service.js'; // [mentions]
 import { htmlToCleanText } from '../../libs/htmlToCleanText.js';
+import { attachmentShareRejection, fileSharePolicyForChannel } from '../../libs/workspace-file-policy.js';
 
 /**
  * Handle send message event
@@ -59,6 +60,9 @@ export const handleSendMessage = async (
       if (!canSendAttachments) {
         throw new Error('File attachments are disabled for this workspace');
       }
+      const sharePolicy = await fileSharePolicyForChannel(data.channelId!);
+      const rejection = attachmentShareRejection(data.attachments, sharePolicy);
+      if (rejection) throw new Error(rejection);
     }
 
     // Get user info
