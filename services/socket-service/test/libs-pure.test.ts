@@ -14,6 +14,14 @@ describe('socket message libs', () => {
     expect(htmlToCleanText('')).toBe('');
   });
 
+  it('keeps bold and italic as markers', () => {
+    expect(htmlToCleanText('<p><strong>Hi</strong> <em>there</em></p>')).toBe('**Hi** *there*');
+  });
+
+  it('keeps ordered lists as numbered lines', () => {
+    expect(htmlToCleanText('<ol><li><p>one</p></li><li><p>two</p></li></ol>')).toBe('1. one\n2. two');
+  });
+
   it('keeps mention spans and drops scripts', () => {
     const clean = sanitizeMessageHtml(
       '<p>Hi <span class="mention" data-id="u2" data-type="user" data-label="Ada">@Ada</span><script>alert(1)</script></p>'

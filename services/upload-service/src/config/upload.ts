@@ -1,15 +1,59 @@
 import multer from 'multer';
 import AWS from 'aws-sdk';
 
-// Configure AWS SDK for Digital Ocean Spaces
-const spacesEndpoint = new AWS.Endpoint(process.env.DO_SPACES_ENDPOINT || 'nyc3.digitaloceanspaces.com');
-const s3 = new AWS.S3({
-  endpoint: spacesEndpoint,
-  accessKeyId: process.env.DO_SPACES_KEY,
-  secretAccessKey: process.env.DO_SPACES_SECRET,
-  signatureVersion: 'v4',
-  s3ForcePathStyle: false,
-});
+const EXT_MIME: Record<string, string> = {
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv',
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  wav: 'audio/wav',
+  webm: 'audio/webm',
+  ogg: 'audio/ogg',
+};
+
+/** Finder drag-and-drop often leaves mimetype empty. Spaces rejects a blank Content-Type. */
+export const contentTypeFor = (file: { mimetype?: string; originalname?: string }): string => {
+  const mime = (file.mimetype || '').toLowerCase();
+  const generic = mime === '' || mime === 'application/octet-stream' || mime === 'text/plain';
+  if (!generic) return mime;
+  const ext = (file.originalname || '').split('.').pop()?.toLowerCase() || '';
+  return EXT_MIME[ext] || mime || 'application/octet-stream';
+};
+
+let s3Client: AWS.S3 | null = null;
+
+const spacesRegion = (): string => {
+  const configured = process.env.DO_SPACES_REGION?.trim();
+  if (configured) return configured;
+  const label = getEndpointHost().split('.')[0];
+  return label && label !== 'digitaloceanspaces' ? label : 'us-east-1';
+};
+
+/**
+ * Built on first use, not at import. The service loads dotenv after the import
+ * graph, so a client created at module scope never sees DO_SPACES_KEY/SECRET.
+ */
+const getS3 = (): AWS.S3 => {
+  if (!s3Client) {
+    s3Client = new AWS.S3({
+      endpoint: new AWS.Endpoint(getEndpointHost()),
+      accessKeyId: process.env.DO_SPACES_KEY,
+      secretAccessKey: process.env.DO_SPACES_SECRET,
+      region: spacesRegion(),
+      signatureVersion: 'v4',
+      s3ForcePathStyle: false,
+    });
+  }
+  return s3Client;
+};
 
 const SIGNED_URL_EXPIRES_SECONDS = Number.parseInt(
   process.env.SPACES_SIGNED_URL_EXPIRES_SECONDS || String(60 * 60 * 24 * 7), // 7 days
@@ -77,7 +121,7 @@ export const getSignedSpacesUrl = async (
     : fileUrlOrKey;
   if (!key) return fileUrlOrKey;
 
-  return s3.getSignedUrlPromise('getObject', {
+  return getS3().getSignedUrlPromise('getObject', {
     Bucket: bucketName,
     Key: key,
     Expires: expiresInSeconds,
@@ -112,13 +156,13 @@ export const uploadToSpaces = async (
     Bucket: bucketName,
     Key: fileName,
     Body: file.buffer,
-    ContentType: file.mimetype,
+    ContentType: contentTypeFor(file),
     ACL: 'private' as const,
   };
 
   try {
     await new Promise<void>((resolve, reject) => {
-      (s3.upload(params) as any).send((err: any) => {
+      (getS3().upload(params) as any).send((err: any) => {
         if (err) reject(err);
         else resolve();
       });
@@ -144,7 +188,7 @@ export const deleteFromSpaces = async (fileUrl: string): Promise<void> => {
 
   try {
     return new Promise<void>((resolve, reject) => {
-      s3.deleteObject(params, (err: any) => {
+      getS3().deleteObject(params, (err: any) => {
         if (err) {
           reject(err);
         } else {

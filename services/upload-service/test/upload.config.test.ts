@@ -48,6 +48,39 @@ describe('config/upload', () => {
         ContentType: 'text/plain',
       })
     );
+    expect(S3).toHaveBeenCalledWith(
+      expect.objectContaining({
+        region: 'nyc3',
+        signatureVersion: 'v4',
+      })
+    );
+  });
+
+  it('uses the file extension when drag-and-drop leaves the mime type empty', async () => {
+    const send = vi.fn((cb: (err: unknown) => void) => cb(null));
+    const upload = vi.fn(() => ({ send }));
+    const S3 = vi.fn(function MockS3() {
+      return { upload, deleteObject: vi.fn() };
+    });
+    const Endpoint = vi.fn(function MockEndpoint() {
+      return {};
+    });
+    vi.doMock('aws-sdk', () => ({ default: { S3, Endpoint }, S3, Endpoint }));
+
+    process.env.DO_SPACES_BUCKET = 'bucket';
+    process.env.DO_SPACES_ENDPOINT = 'blr1.digitaloceanspaces.com';
+    process.env.DO_SPACES_KEY = 'key';
+    process.env.DO_SPACES_SECRET = 'secret';
+    const { uploadToSpaces } = await import('../src/config/upload.js');
+    await uploadToSpaces({ originalname: 'shot.png', buffer: Buffer.from('x'), mimetype: '' } as any);
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({ ContentType: 'image/png' }));
+    expect(S3).toHaveBeenCalledWith(
+      expect.objectContaining({
+        region: 'blr1',
+        accessKeyId: 'key',
+        secretAccessKey: 'secret',
+      })
+    );
   });
 
   it('uploadToSpaces rejects when S3 upload callback returns error', async () => {

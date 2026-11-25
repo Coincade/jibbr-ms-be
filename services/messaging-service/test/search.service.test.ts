@@ -15,23 +15,46 @@ vi.mock('../src/config/database.js', () => ({
   default: prismaMock,
 }));
 
+import prisma from '../src/config/database.js';
 import { performSearch } from '../src/services/search.service.js';
+
+/**
+ * Unit tests share one module graph (`isolate: false`). Another file may own
+ * the database mock, so drive the prisma instance search.service imported.
+ */
+function prismaFn(model: string, method: string) {
+  const root = prisma as unknown as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
+  if (!root[model]) root[model] = {};
+  if (typeof root[model][method] !== 'function') root[model][method] = vi.fn();
+  return root[model][method];
+}
+
+const db = {
+  member: { get findMany() { return prismaFn('member', 'findMany'); } },
+  workspaceCollaboration: { get findMany() { return prismaFn('workspaceCollaboration', 'findMany'); } },
+  collaborationGroupMembership: { get findMany() { return prismaFn('collaborationGroupMembership', 'findMany'); } },
+  channelMember: { get findMany() { return prismaFn('channelMember', 'findMany'); } },
+  channel: { get findMany() { return prismaFn('channel', 'findMany'); } },
+  conversationParticipant: { get findMany() { return prismaFn('conversationParticipant', 'findMany'); } },
+  message: { get findMany() { return prismaFn('message', 'findMany'); } },
+  attachment: { get findMany() { return prismaFn('attachment', 'findMany'); } },
+};
 
 describe('search.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    prismaMock.workspaceCollaboration.findMany.mockResolvedValue([]);
-    prismaMock.collaborationGroupMembership.findMany.mockResolvedValue([]);
-    prismaMock.channelMember.findMany.mockResolvedValue([]);
-    prismaMock.channel.findMany.mockResolvedValue([]);
-    prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
-    prismaMock.message.findMany.mockResolvedValue([]);
-    prismaMock.attachment.findMany.mockResolvedValue([]);
-    prismaMock.member.findMany.mockResolvedValue([]);
+    db.workspaceCollaboration.findMany.mockResolvedValue([]);
+    db.collaborationGroupMembership.findMany.mockResolvedValue([]);
+    db.channelMember.findMany.mockResolvedValue([]);
+    db.channel.findMany.mockResolvedValue([]);
+    db.conversationParticipant.findMany.mockResolvedValue([]);
+    db.message.findMany.mockResolvedValue([]);
+    db.attachment.findMany.mockResolvedValue([]);
+    db.member.findMany.mockResolvedValue([]);
   });
 
   it('returns empty result when user has no workspace memberships', async () => {
-    prismaMock.member.findMany.mockResolvedValueOnce([]);
+    db.member.findMany.mockResolvedValueOnce([]);
 
     const result = await performSearch('u1', { q: 'hello' });
 
@@ -50,11 +73,11 @@ describe('search.service', () => {
   });
 
   it('builds message filter with link and image constraints', async () => {
-    prismaMock.member.findMany
+    db.member.findMany
       .mockResolvedValueOnce([{ workspaceId: 'w1' }]) // memberships
       .mockResolvedValueOnce([]); // searchUsers member query
-    prismaMock.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
-    prismaMock.channel.findMany.mockResolvedValue([
+    db.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
+    db.channel.findMany.mockResolvedValue([
       {
         id: 'c1',
         name: 'general',
@@ -66,27 +89,27 @@ describe('search.service', () => {
         _count: { members: 3 },
       },
     ]);
-    prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
-    prismaMock.message.findMany
+    db.conversationParticipant.findMany.mockResolvedValue([]);
+    db.message.findMany
       .mockResolvedValueOnce([]) // searchMessages
       .mockResolvedValueOnce([]); // searchFiles messages
-    prismaMock.attachment.findMany.mockResolvedValue([]);
+    db.attachment.findMany.mockResolvedValue([]);
 
     await performSearch('u1', { q: 'foo', has: 'link' });
-    const messageWhereLink = prismaMock.message.findMany.mock.calls[0][0].where;
+    const messageWhereLink = db.message.findMany.mock.calls[0][0].where;
     expect(messageWhereLink.AND).toEqual([
       { content: { contains: 'foo', mode: 'insensitive' } },
       { content: { contains: 'http', mode: 'insensitive' } },
     ]);
 
     vi.clearAllMocks();
-    prismaMock.workspaceCollaboration.findMany.mockResolvedValue([]);
-    prismaMock.collaborationGroupMembership.findMany.mockResolvedValue([]);
-    prismaMock.member.findMany
+    db.workspaceCollaboration.findMany.mockResolvedValue([]);
+    db.collaborationGroupMembership.findMany.mockResolvedValue([]);
+    db.member.findMany
       .mockResolvedValueOnce([{ workspaceId: 'w1' }])
       .mockResolvedValueOnce([]);
-    prismaMock.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
-    prismaMock.channel.findMany.mockResolvedValue([
+    db.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
+    db.channel.findMany.mockResolvedValue([
       {
         id: 'c1',
         name: 'general',
@@ -98,39 +121,39 @@ describe('search.service', () => {
         _count: { members: 3 },
       },
     ]);
-    prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
-    prismaMock.message.findMany
+    db.conversationParticipant.findMany.mockResolvedValue([]);
+    db.message.findMany
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
-    prismaMock.attachment.findMany.mockResolvedValue([]);
+    db.attachment.findMany.mockResolvedValue([]);
 
     await performSearch('u1', { q: 'foo', has: 'image' });
-    const messageWhereImage = prismaMock.message.findMany.mock.calls[0][0].where;
+    const messageWhereImage = db.message.findMany.mock.calls[0][0].where;
     expect(messageWhereImage.attachments).toEqual({
       some: { mimeType: { startsWith: 'image/' } },
     });
   });
 
   it('includes collaborator workspaces when discovery is enabled', async () => {
-    prismaMock.member.findMany
+    db.member.findMany
       .mockResolvedValueOnce([{ workspaceId: 'w1' }])
       .mockResolvedValueOnce([]);
-    prismaMock.workspaceCollaboration.findMany.mockResolvedValue([
+    db.workspaceCollaboration.findMany.mockResolvedValue([
       {
         workspaceAId: 'w1',
         workspaceBId: 'w2',
         policy: { allowExternalDiscovery: true },
       },
     ]);
-    prismaMock.channelMember.findMany.mockResolvedValue([]);
-    prismaMock.channel.findMany.mockResolvedValue([]);
-    prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
-    prismaMock.message.findMany.mockResolvedValue([]);
-    prismaMock.attachment.findMany.mockResolvedValue([]);
+    db.channelMember.findMany.mockResolvedValue([]);
+    db.channel.findMany.mockResolvedValue([]);
+    db.conversationParticipant.findMany.mockResolvedValue([]);
+    db.message.findMany.mockResolvedValue([]);
+    db.attachment.findMany.mockResolvedValue([]);
 
     await performSearch('u1', { q: 'hello' });
 
-    expect(prismaMock.channel.findMany).toHaveBeenCalledWith(
+    expect(db.channel.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           workspaceId: { in: expect.arrayContaining(['w1', 'w2']) },
@@ -140,7 +163,7 @@ describe('search.service', () => {
   });
 
   it('computes has_more and totals from all result groups', async () => {
-    prismaMock.member.findMany
+    db.member.findMany
       .mockResolvedValueOnce([{ workspaceId: 'w1' }])
       .mockResolvedValueOnce([
         {
@@ -149,8 +172,8 @@ describe('search.service', () => {
           workspace: { id: 'w1', name: 'Main' },
         },
       ]);
-    prismaMock.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
-    prismaMock.channel.findMany.mockResolvedValue([
+    db.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
+    db.channel.findMany.mockResolvedValue([
       {
         id: 'c1',
         name: 'general',
@@ -192,8 +215,8 @@ describe('search.service', () => {
         _count: { members: 5 },
       },
     ]);
-    prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
-    prismaMock.message.findMany
+    db.conversationParticipant.findMany.mockResolvedValue([]);
+    db.message.findMany
       .mockResolvedValueOnce([
         {
           id: 'm1',
@@ -215,7 +238,7 @@ describe('search.service', () => {
         },
       ])
       .mockResolvedValueOnce([{ id: 'm1', channelId: 'c1', userId: 'u1' }]);
-    prismaMock.attachment.findMany.mockResolvedValue([
+    db.attachment.findMany.mockResolvedValue([
       {
         id: 'a1',
         filename: 'hello.png',
@@ -241,11 +264,11 @@ describe('search.service', () => {
   });
 
   it('applies date/user/channel filters in message where clause', async () => {
-    prismaMock.member.findMany
+    db.member.findMany
       .mockResolvedValueOnce([{ workspaceId: 'w1' }])
       .mockResolvedValueOnce([]);
-    prismaMock.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
-    prismaMock.channel.findMany.mockResolvedValue([
+    db.channelMember.findMany.mockResolvedValue([{ channelId: 'c1' }]);
+    db.channel.findMany.mockResolvedValue([
       {
         id: 'c1',
         name: 'general',
@@ -257,9 +280,9 @@ describe('search.service', () => {
         _count: { members: 3 },
       },
     ]);
-    prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
-    prismaMock.message.findMany.mockResolvedValue([]);
-    prismaMock.attachment.findMany.mockResolvedValue([]);
+    db.conversationParticipant.findMany.mockResolvedValue([]);
+    db.message.findMany.mockResolvedValue([]);
+    db.attachment.findMany.mockResolvedValue([]);
 
     await performSearch('u1', {
       q: 'hello',
@@ -268,25 +291,25 @@ describe('search.service', () => {
       before: '2026-01-05T00:00:00.000Z',
     });
 
-    const where = prismaMock.message.findMany.mock.calls[0][0].where;
+    const where = db.message.findMany.mock.calls[0][0].where;
     expect(where.userId).toBe('u2');
     expect(where.channelId).toBe('c1');
     expect(where.createdAt).toEqual({ lt: new Date('2026-01-05T00:00:00.000Z') });
   });
 
   it('excludes workspace-local public channels in discovery-only partner workspaces', async () => {
-    prismaMock.member.findMany
+    db.member.findMany
       .mockResolvedValueOnce([{ workspaceId: 'w_coincade' }])
       .mockResolvedValueOnce([]);
-    prismaMock.workspaceCollaboration.findMany.mockResolvedValue([
+    db.workspaceCollaboration.findMany.mockResolvedValue([
       {
         workspaceAId: 'w_coincade',
         workspaceBId: 'w_elventive',
         policy: { allowExternalDiscovery: true },
       },
     ]);
-    prismaMock.channelMember.findMany.mockResolvedValue([]);
-    prismaMock.channel.findMany.mockResolvedValue([
+    db.channelMember.findMany.mockResolvedValue([]);
+    db.channel.findMany.mockResolvedValue([
       {
         id: 'c_own_general',
         name: 'General',
@@ -318,9 +341,9 @@ describe('search.service', () => {
         _count: { members: 2 },
       },
     ]);
-    prismaMock.conversationParticipant.findMany.mockResolvedValue([]);
-    prismaMock.message.findMany.mockResolvedValue([]);
-    prismaMock.attachment.findMany.mockResolvedValue([]);
+    db.conversationParticipant.findMany.mockResolvedValue([]);
+    db.message.findMany.mockResolvedValue([]);
+    db.attachment.findMany.mockResolvedValue([]);
 
     const result = await performSearch('u1', { q: '', limit: 20 });
     const channelIds = result.channels.map((c) => c.id);

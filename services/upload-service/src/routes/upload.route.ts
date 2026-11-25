@@ -5,9 +5,40 @@ import authMiddleware from '../middleware/Auth.middleware.js';
 
 const router = express.Router();
 
+/** fileFilter rejects with next(err). Without this, Express turns that into a bare 500. */
+const rejectMulterError = (err: unknown, res: Response, next: NextFunction): void => {
+  if (!err) {
+    next();
+    return;
+  }
+  const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code) : '';
+  const message = err instanceof Error ? err.message : 'Upload failed';
+  if (code === 'LIMIT_FILE_SIZE') {
+    res.status(400).json({
+      message: 'File is too large. Maximum size is 2MB',
+      errors: { files: 'File is too large. Maximum size is 2MB' },
+    });
+    return;
+  }
+  if (code === 'LIMIT_FILE_COUNT' || code === 'LIMIT_UNEXPECTED_FILE') {
+    res.status(400).json({
+      message: 'You can attach up to 5 files at once.',
+      errors: { files: message },
+    });
+    return;
+  }
+  if (/can't be shared|can be shared|too large|file type/i.test(message)) {
+    res.status(400).json({ message, errors: { files: message } });
+    return;
+  }
+  next(err);
+};
+
 router.post('/files',
   authMiddleware as unknown as RequestHandler,
-  upload.array('files', 5) as unknown as RequestHandler,
+  ((req: Request, res: Response, next: NextFunction) => {
+    upload.array('files', 5)(req, res, (err: unknown) => rejectMulterError(err, res, next));
+  }) as unknown as RequestHandler,
   uploadFiles as unknown as RequestHandler
 );
 

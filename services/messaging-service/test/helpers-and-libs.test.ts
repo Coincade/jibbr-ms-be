@@ -31,6 +31,24 @@ describe('small helpers and libs', () => {
     expect(out).toContain('next');
   });
 
+  it('htmlToCleanText keeps bold, italic, underline and strike', () => {
+    expect(htmlToCleanText('<p><strong>Hi</strong></p>')).toBe('**Hi**');
+    expect(htmlToCleanText('<p><em>Hi</em></p>')).toBe('*Hi*');
+    expect(htmlToCleanText('<p><u>Hi</u></p>')).toBe('++Hi++');
+    expect(htmlToCleanText('<p><s>Hi</s></p>')).toBe('~~Hi~~');
+    expect(htmlToCleanText('<p><strong><em>Hi</em></strong></p>')).toBe('***Hi***');
+    expect(htmlToCleanText('<p>Hello <strong>there</strong></p>')).toBe('Hello **there**');
+  });
+
+  it('htmlToCleanText keeps unordered and ordered lists', () => {
+    expect(htmlToCleanText('<ul><li><p>one</p></li><li><p>two</p></li></ul>')).toBe('- one\n- two');
+    expect(htmlToCleanText('<ol><li><p>one</p></li><li><p>two</p></li></ol>')).toBe('1. one\n2. two');
+    expect(htmlToCleanText('<ul><li><p><strong>one</strong></p></li></ul>')).toBe('- **one**');
+    expect(
+      htmlToCleanText('<ul><li><p>parent</p><ul><li><p>child</p></li></ul></li></ul>')
+    ).toBe('- parent\n  - child');
+  });
+
   it('sanitizeMessageHtml keeps mention spans and strips unsafe tags', () => {
     const out = sanitizeMessageHtml(
       '<script>alert(1)</script><span class="mention" data-id="u1" data-label="alice">@alice</span><span>plain</span>'
