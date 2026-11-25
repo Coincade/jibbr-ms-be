@@ -1,5 +1,18 @@
-import prisma from '../config/database.js';
+import prismaClient from '../config/database.js';
 import type { Prisma } from '@prisma/client';
+
+/**
+ * `isolate: false` keeps this module loaded, and the first test file to import
+ * it freezes its database client. Later files cannot replace that binding with
+ * another `vi.mock`, so tests retarget this reference for their own run.
+ */
+let prisma = prismaClient;
+
+export function setSearchPrismaForTests(next: typeof prismaClient): typeof prismaClient {
+  const previous = prisma;
+  prisma = next;
+  return previous;
+}
 
 export interface SearchParams {
   q: string;

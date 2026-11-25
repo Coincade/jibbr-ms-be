@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prismaMock = vi.hoisted(() => ({
   member: { findMany: vi.fn() },
@@ -15,30 +15,15 @@ vi.mock('../src/config/database.js', () => ({
   default: prismaMock,
 }));
 
-import prisma from '../src/config/database.js';
-import { performSearch } from '../src/services/search.service.js';
+import { performSearch, setSearchPrismaForTests } from '../src/services/search.service.js';
 
-/**
- * Unit tests share one module graph (`isolate: false`). Another file may own
- * the database mock, so drive the prisma instance search.service imported.
- */
-function prismaFn(model: string, method: string) {
-  const root = prisma as unknown as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
-  if (!root[model]) root[model] = {};
-  if (typeof root[model][method] !== 'function') root[model][method] = vi.fn();
-  return root[model][method];
-}
+const previousPrisma = setSearchPrismaForTests(prismaMock as never);
 
-const db = {
-  member: { get findMany() { return prismaFn('member', 'findMany'); } },
-  workspaceCollaboration: { get findMany() { return prismaFn('workspaceCollaboration', 'findMany'); } },
-  collaborationGroupMembership: { get findMany() { return prismaFn('collaborationGroupMembership', 'findMany'); } },
-  channelMember: { get findMany() { return prismaFn('channelMember', 'findMany'); } },
-  channel: { get findMany() { return prismaFn('channel', 'findMany'); } },
-  conversationParticipant: { get findMany() { return prismaFn('conversationParticipant', 'findMany'); } },
-  message: { get findMany() { return prismaFn('message', 'findMany'); } },
-  attachment: { get findMany() { return prismaFn('attachment', 'findMany'); } },
-};
+afterAll(() => {
+  setSearchPrismaForTests(previousPrisma);
+});
+
+const db = prismaMock;
 
 describe('search.service', () => {
   beforeEach(() => {
