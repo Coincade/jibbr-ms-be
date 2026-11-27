@@ -18,7 +18,7 @@ import {
 const config: ErpConfig = {
   clientId: 'client',
   clientSecret: 'secret',
-  baseUrl: 'http://192.168.1.92:8001',
+  baseUrl: 'http://192.168.1.15:8001',
   redirectUri: 'http://localhost:3000/erp/callback',
 };
 
@@ -80,7 +80,7 @@ function memoryRepo(): ErpRepository & { rows: Map<string, ErpLinkRecord> } {
 describe('ERP connect', () => {
   it('builds the consent URL with the registered callback', () => {
     const url = new URL(buildAuthorizeUrl(config, 'state-value-with-enough-length'));
-    expect(url.origin + url.pathname).toBe('http://192.168.1.92:8001/app/login/oauth2/authorize.nl');
+    expect(url.origin + url.pathname).toBe('http://192.168.1.15:8001/app/login/oauth2/authorize.nl');
     expect(url.searchParams.get('response_type')).toBe('code');
     expect(url.searchParams.get('client_id')).toBe('client');
     expect(url.searchParams.get('redirect_uri')).toBe('http://localhost:3000/erp/callback');
@@ -236,7 +236,7 @@ describe('ERP ask forward', () => {
       userId: 'user-1',
       repo,
       config,
-      ragBase: 'http://192.168.1.92:8000',
+      ragBase: 'http://192.168.1.15:8000',
       body: { question: 'who is vikram?', history: [] },
       bypassCache: false,
       fetchImpl,
@@ -244,7 +244,7 @@ describe('ERP ask forward', () => {
     });
 
     expect(calls).toEqual([{
-      url: 'http://192.168.1.92:8000/api/ask/stream',
+      url: 'http://192.168.1.15:8000/api/ask/stream',
       authorization: 'Bearer erp-access',
       bypass: null,
     }]);
@@ -267,7 +267,7 @@ describe('ERP ask forward', () => {
       userId: 'user-1',
       repo,
       config,
-      ragBase: 'http://192.168.1.92:8000',
+      ragBase: 'http://192.168.1.15:8000',
       body: { question: 'what is the leave policy?', history: [] },
       bypassCache: false,
       fetchImpl,
@@ -299,7 +299,7 @@ describe('ERP ask forward', () => {
       userId: 'user-1',
       repo,
       config,
-      ragBase: 'http://192.168.1.92:8000',
+      ragBase: 'http://192.168.1.15:8000',
       body: { question: 'who is vikram?', history: [] },
       bypassCache: false,
       fetchImpl,
@@ -330,7 +330,7 @@ describe('ERP ask forward', () => {
       userId: 'user-1',
       repo,
       config,
-      ragBase: 'http://192.168.1.92:8000',
+      ragBase: 'http://192.168.1.15:8000',
       body: { question: 'who is vikram?', history: [] },
       bypassCache: true,
       fetchImpl,

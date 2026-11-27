@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 const REFRESH_WINDOW_MS = 60 * 1000;
-const DEFAULT_RAG_API_URL = 'http://192.168.1.92:8000';
+const DEFAULT_RAG_API_URL = 'http://192.168.1.15:8000';
 
 export class ErpConfigError extends Error {
   constructor(message: string) {
@@ -60,7 +60,7 @@ export interface ErpStatus {
 export function erpConfigFromEnv(env: NodeJS.ProcessEnv = process.env): ErpConfig {
   const clientId = env.ERP_CLIENT_ID?.trim() ?? '';
   const clientSecret = env.ERP_CLIENT_SECRET?.trim() ?? '';
-  const baseUrl = (env.ERP_BASE_URL?.trim() || 'http://192.168.1.92:8001').replace(/\/$/, '');
+  const baseUrl = (env.ERP_BASE_URL?.trim() || 'http://192.168.1.15:8001').replace(/\/$/, '');
   const redirectUri = env.ERP_REDIRECT_URI?.trim() || 'http://localhost:3000/erp/callback';
   if (!clientId || !clientSecret) {
     throw new ErpConfigError('HIRECT ERP login is not configured.');
